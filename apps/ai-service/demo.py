@@ -45,15 +45,24 @@ def print_chunk_result(rank: int, chunk, source_label: str):
     BOLD   = "\033[1m"
     YELLOW = "\033[93m"
     WHITE  = "\033[97m"
+    GREY   = "\033[90m"
+    GREEN  = "\033[92m"
 
-    preview = textwrap.fill(chunk.text[:300].replace("\n", " "), width=56)
-    preview_lines = preview.splitlines()
+    # Score label differs by method
+    if source_label == "BM25":
+        score_note = "keyword relevance"
+    else:
+        score_note = "semantic similarity (0–1)"
 
-    print(f"  {BOLD}{YELLOW}#{rank}  {chunk.filename}  |  page {chunk.page_num}  |  score {chunk.score:.4f}{RESET}")
-    for line in preview_lines:
+    print(f"  {BOLD}{YELLOW}#{rank}  {chunk.filename}  |  page {chunk.page_num}{RESET}")
+    print(f"  {GREY}    Score : {chunk.score:.4f}  ({score_note}){RESET}")
+    print(f"  {GREY}    Chunk ID : {chunk.chunk_id}{RESET}")
+    print()
+
+    # Full text — no truncation, wrapped cleanly
+    full_text = textwrap.fill(chunk.text.replace("\n", " "), width=60)
+    for line in full_text.splitlines():
         print(f"      {WHITE}{line}{RESET}")
-    if len(chunk.text) > 300:
-        print(f"      \033[90m… (truncated){RESET}")
     print()
 
 
@@ -235,6 +244,22 @@ def main():
                 source      = "dense",
             )
             print_chunk_result(i, chunk, "Dense")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # SCORE INTERPRETATION + WHY RESULTS DIFFER
+    # ════════════════════════════════════════════════════════════════════════
+    BOLD  = "\033[1m"
+    CYAN  = "\033[96m"
+    RESET = "\033[0m"
+    GREY  = "\033[90m"
+
+    print(f"\n{BOLD}{CYAN}── Why the two result sets may differ ──────────────────{RESET}")
+    print(f"  {GREY}BM25   ranks by KEYWORD overlap — exact word matches.{RESET}")
+    print(f"  {GREY}Dense  ranks by MEANING — finds similar concepts even{RESET}")
+    print(f"  {GREY}       if the words are different (e.g. 'income' vs 'revenue').{RESET}")
+    print(f"  {GREY}When they disagree, BOTH are partly right.{RESET}")
+    print(f"  {GREY}v0.2 uses RRF to fuse both ranked lists into one{RESET}")
+    print(f"  {GREY}superior result — then a reranker picks the best 3.{RESET}\n")
 
     # ════════════════════════════════════════════════════════════════════════
     # SUMMARY
