@@ -60,6 +60,17 @@ Use `docker ps` to confirm all containers show `Up`, and `docker-compose logs <s
 ### 3. Frontend shows 404 at localhost:3000
 **Status:** Expected, not a bug. `apps/frontend/src/{components,pages,hooks,store,utils}` currently contain only `.gitkeep` placeholders — no actual React app or `index.html` has been built yet. The 404 confirms the dev server itself is healthy and correctly reports "no page to serve." This will resolve naturally once frontend development begins.
 
+## Current implementation status (by service)
+
+| Service | Status |
+|---|---|
+| ai-service | 4 modules merged (ingestion, chunking, embeddings, retrieval) — boots and runs |
+| postgres | Running, accepting connections |
+| qdrant | Running |
+| ollama | Running (target model: `llama3.2:3b`) |
+| frontend | Boots cleanly after fixes above. `src/{components,pages,hooks,store,utils}` contain only `.gitkeep` — no app built yet. 404 at localhost:3000 is expected. |
+| backend | **Fails to boot.** `src/index.js` does not exist — `dev`/`start` scripts reference it but it was never created. `src/{controllers,middleware,prisma,routes,utils}` contain only `.gitkeep`. This appears to be expected scaffolding-only state (matches roadmap: backend auth + Postgres integration is a v0.3 milestone), not a regression — flagging here for visibility rather than fixing, since building the actual backend is outside DevOps/QA scope. |
+
 ## Current verified state (as of this entry)
 - Full `docker-compose up --build` succeeds across all 6 services with no errors.
 - Postgres, Qdrant, Ollama, ai-service, and backend all boot cleanly.
