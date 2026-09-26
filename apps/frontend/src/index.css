@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* ============================================================
+   EKIP Design Tokens
+   "Library index card" visual language — paper, ink, and one
+   amber signal reserved exclusively for source citations.
+   ============================================================ */
+@theme {
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Surfaces */
+  --color-paper: #f6f4ef;
+  --color-paper-raised: #ffffff;
+  --color-ink: #14171f;
+  --color-ink-soft: #2b2f3a;
+
+  /* Text */
+  --color-slate: #5b6478;
+  --color-slate-light: #8b93a3;
+
+  /* Primary action — "index blue" */
+  --color-index: #2a3fa0;
+  --color-index-hover: #23348a;
+  --color-index-soft: #e8eafc;
+
+  /* Signal — reserved ONLY for citations / source-linked content */
+  --color-signal: #c2793a;
+  --color-signal-soft: #f6e9dc;
+
+  /* Status */
+  --color-success: #4c7a5d;
+  --color-danger: #a3403a;
+
+  /* Role colors — muted, not traffic-light */
+  --color-role-admin: #8b3a3a;
+  --color-role-manager: #2a3fa0;
+  --color-role-employee: #4c7a5d;
+  --color-role-intern: #6b6f7a;
+
+  /* Borders */
+  --color-hairline: #e2ddd1;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Visible keyboard focus everywhere — non-negotiable for an
+   internal enterprise tool that will be used all day. */
+:focus-visible {
+  outline: 2px solid var(--color-index);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
