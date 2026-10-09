@@ -46,6 +46,7 @@ model User {
   role          Role
   department    Department @relation(fields: [department_id], references: [id])
   documents     Document[]
+  refresh_tokens RefreshToken[]
 }
 
 model Document {
@@ -58,4 +59,13 @@ model Document {
   created_at    DateTime   @default(now())
   department    Department @relation(fields: [department_id], references: [id])
   uploader      User       @relation(fields: [uploaded_by], references: [id])
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  user_id    String
+  token_hash String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+  user       User     @relation(fields: [user_id], references: [id])
 }
