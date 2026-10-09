@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  Admin
+  Manager
+  Employee
+  Intern
+}
+
+model Organization {
+  id         String      @id @default(uuid())
+  name       String
+  created_at DateTime    @default(now())
+  workspaces Workspace[]
+}
+
+model Workspace {
+  id          String       @id @default(uuid())
+  org_id      String
+  name        String
+  organization Organization @relation(fields: [org_id], references: [id])
+  departments Department[]
+}
+
+model Department {
+  id           String    @id @default(uuid())
+  workspace_id String
+  name         String
+  workspace    Workspace @relation(fields: [workspace_id], references: [id])
+  users        User[]
+  documents    Document[]
+}
+
+model User {
+  id            String     @id @default(uuid())
+  department_id String
+  email         String     @unique
+  password_hash String
+  role          Role
+  department    Department @relation(fields: [department_id], references: [id])
+  documents     Document[]
+  refresh_tokens RefreshToken[]
+}
+
+model Document {
+  id            String     @id @default(uuid())
+  department_id String
+  filename      String
+  file_type     String
+  uploaded_by   String
+  allowed_roles Role[]
+  created_at    DateTime   @default(now())
+  department    Department @relation(fields: [department_id], references: [id])
+  uploader      User       @relation(fields: [uploaded_by], references: [id])
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  user_id    String
+  token_hash String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+  user       User     @relation(fields: [user_id], references: [id])
+}
