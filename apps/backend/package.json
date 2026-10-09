@@ -5,6 +5,9 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js"
   },
+  "prisma": {
+  "schema": "src/prisma/schema.prisma"
+},
   "dependencies": {
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
