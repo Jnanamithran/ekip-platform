@@ -56,10 +56,10 @@ export default function DashboardLayout() {
       <div className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-hairline bg-paper-raised px-6 py-3">
           <div className="flex items-center gap-3">
-            <Avatar name={user.name} />
+            <Avatar name={user.email || user.name} />
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-ink">{user.name}</span>
-              <span className="text-xs text-slate">{user.department}</span>
+              <span className="text-sm font-medium text-ink">{user.email || user.name}</span>
+              <span className="text-xs text-slate">{user.department || "Department"}</span>
             </div>
             <RoleBadge role={user.role} />
           </div>

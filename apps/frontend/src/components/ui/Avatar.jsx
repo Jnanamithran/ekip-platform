@@ -4,8 +4,9 @@ const SIZES = {
 };
 
 export default function Avatar({ name, size = "md" }) {
-  const initials = name
-    .split(" ")
+  const initials = (name || "?")
+    .trim()
+    .split(/\s+/)
     .map((part) => part[0])
     .slice(0, 2)
     .join("")
