@@ -33,7 +33,7 @@ docker-compose up --build <service-name>
 | ollama | Container status `Up` |
 | ai-service | Container status `Up`, no crash in logs |
 | backend | Container status `Up`, no crash in logs |
-| frontend | Visit `http://localhost:3000/` — a 404 is currently expected (see Known Issues) |
+| frontend | Visit `http://localhost:5173/` — a 404 is currently expected (see Known Issues) |
 
 Use `docker ps` to confirm all containers show `Up`, and `docker-compose logs <service-name>` to inspect any individual service's output.
 
@@ -57,7 +57,7 @@ Use `docker ps` to confirm all containers show `Up`, and `docker-compose logs <s
 "dev": "vite --host --port 3000"
 ```
 
-### 3. Frontend shows 404 at localhost:3000
+### 3. Frontend shows 404 at localhost:5173
 **Status:** Expected, not a bug. `apps/frontend/src/{components,pages,hooks,store,utils}` currently contain only `.gitkeep` placeholders — no actual React app or `index.html` has been built yet. The 404 confirms the dev server itself is healthy and correctly reports "no page to serve." This will resolve naturally once frontend development begins.
 
 ## Current implementation status (by service)
@@ -68,7 +68,7 @@ Use `docker ps` to confirm all containers show `Up`, and `docker-compose logs <s
 | postgres | Running, accepting connections |
 | qdrant | Running |
 | ollama | Running (target model: `llama3.2:3b`) |
-| frontend | Boots cleanly after fixes above. `src/{components,pages,hooks,store,utils}` contain only `.gitkeep` — no app built yet. 404 at localhost:3000 is expected. |
+| frontend | Boots cleanly after fixes above. `src/{components,pages,hooks,store,utils}` contain only `.gitkeep` — no app built yet. 404 at localhost:5173 is expected. |
 | backend | **Fails to boot.** `src/index.js` does not exist — `dev`/`start` scripts reference it but it was never created. `src/{controllers,middleware,prisma,routes,utils}` contain only `.gitkeep`. This appears to be expected scaffolding-only state (matches roadmap: backend auth + Postgres integration is a v0.3 milestone), not a regression — flagging here for visibility rather than fixing, since building the actual backend is outside DevOps/QA scope. |
 
 ## Current verified state (as of this entry)
