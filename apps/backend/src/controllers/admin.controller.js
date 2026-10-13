@@ -61,5 +61,45 @@ async function createUser(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
+// GET /admin/users  (Admin only)
+// Optional filters: ?department_id=...&role=...&limit=50&offset=0
+async function listUsers(req, res) {
+  try {
+    const { department_id, role } = req.query;
 
-module.exports = { createUser };
+    if (role && !Object.values(Role).includes(role)) {
+      return res.status(400).json({
+        error: `role must be one of: ${Object.values(Role).join(', ')}`,
+      });
+    }
+
+    // Read limit/offset as numbers, with safe defaults and a cap
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    // The org filter always comes from the token, never from the request.
+    // The other filters only narrow the result inside that org.
+    const where = {
+      department: { workspace: { org_id: req.user.org_id } },
+      ...(department_id && { department_id }),
+      ...(role && { role }),
+    };
+
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        select: { id: true, email: true, role: true, department_id: true },
+        orderBy: { email: 'asc' },
+        take: limit,
+        skip: offset,
+      }),
+      prisma.user.count({ where }),
+    ]);
+
+    res.json({ users, total, limit, offset });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+module.exports = { createUser, listUsers };
