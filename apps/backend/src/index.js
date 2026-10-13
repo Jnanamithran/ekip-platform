@@ -5,7 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
-
+app.use('/auth', require('./routes/auth.routes'));
 app.get('/', (req, res) => {
   res.send('EKIP backend is alive!');
 });
