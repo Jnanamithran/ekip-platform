@@ -1,6 +1,6 @@
 const express = require('express');
 const { authenticate, requireRole } = require('../middleware/auth.middleware');
-const { createUser } = require('../controllers/admin.controller');
+const { createUser, listUsers } = require('../controllers/admin.controller');
 
 const router = express.Router();
 
@@ -9,5 +9,6 @@ const router = express.Router();
 router.use(authenticate, requireRole('Admin'));
 
 router.post('/users', createUser);
+router.get('/users', listUsers);
 
 module.exports = router;
