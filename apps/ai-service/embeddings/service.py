@@ -10,7 +10,7 @@ enforcing the platform's core rule that authorization is structural, not
 a filter bolted on after retrieval.
 """
 
-from typing import List, TYPE_CHECKING
+from typing import Callable, List, Optional, TYPE_CHECKING
 from qdrant_client.models import PointStruct
 
 from .embedder import embed_texts
@@ -21,7 +21,11 @@ if TYPE_CHECKING:
     from chunking.schema import Chunk
 
 
-def embed_and_upsert(chunks: List["Chunk"], rbac: RBACMetadata) -> int:
+def embed_and_upsert(
+    chunks: List["Chunk"],
+    rbac: RBACMetadata,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> int:
     """
     Embeds all chunks and upserts them into Qdrant with RBAC + citation
     metadata attached. Returns the number of points written.
@@ -52,6 +56,8 @@ def embed_and_upsert(chunks: List["Chunk"], rbac: RBACMetadata) -> int:
         )
 
     client = get_client()
+    if progress_callback:
+        progress_callback("Writing chunks to the searchable index")
     client.upsert(collection_name=COLLECTION_NAME, points=points)
 
     return len(points)
