@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
 const app = express();
 const PORT = process.env.PORT || 5000;
 const frontendOrigins = (
@@ -21,16 +20,8 @@ app.use('/auth', require('./routes/auth.routes'));
 app.use('/admin', require('./routes/admin.routes'));
 app.use('/organizations', require('./routes/organization.routes'));
 
-// Multipart file upload middleware for document ingestion
-// Configures memory storage so files are available as buffers
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max
-});
-
 // AI service proxy routes (query, ingest, health)
-// The /ingest route uses multer to handle multipart/form-data uploads
-app.use('/ai', upload.single('file'), require('./routes/ai.routes'));
+app.use('/ai', require('./routes/ai.routes'));
 
 app.get('/', (req, res) => {
   res.send('EKIP backend is alive!');
@@ -43,4 +34,3 @@ app.get('/health', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
-
