@@ -35,6 +35,7 @@ Design decisions
 
 from typing import List
 from dataclasses import dataclass
+import os
 import ollama
 
 from retrieval.schema import RetrievedChunk
@@ -43,7 +44,8 @@ from retrieval.schema import RetrievedChunk
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 DEFAULT_MODEL       = "llama3.2:3b"
-OLLAMA_HOST         = "http://localhost:11434"
+OLLAMA_URL          = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_CLIENT       = ollama.Client(host=OLLAMA_URL)
 TEMPERATURE         = 0.1     # near-deterministic — factual Q&A, not creative
 MAX_CONTEXT_CHUNKS  = 5       # how many chunks to include in the prompt
 MAX_TOKENS          = 512     # answer length ceiling
@@ -146,7 +148,7 @@ def generate_answer(
     prompt = _build_prompt(query, context_chunks)
 
     # Call Ollama — runs fully locally, no internet required after model pull
-    response = ollama.chat(
+    response = OLLAMA_CLIENT.chat(
         model   = model,
         messages = [{"role": "user", "content": prompt}],
         options  = {
