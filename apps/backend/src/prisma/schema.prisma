@@ -54,11 +54,24 @@ model Document {
   department_id String
   filename      String
   file_type     String
+  status        String     @default("Indexed")
+  stage         String     @default("Complete")
+  progress      Int        @default(100)
+  chunk_count   Int        @default(0)
   uploaded_by   String
   allowed_roles Role[]
   created_at    DateTime   @default(now())
   department    Department @relation(fields: [department_id], references: [id])
   uploader      User       @relation(fields: [uploaded_by], references: [id])
+}
+
+model AiRequestProgress {
+  request_id String   @id
+  user_id    String
+  stage      String
+  created_at DateTime @default(now())
+
+  @@index([created_at])
 }
 
 model RefreshToken {

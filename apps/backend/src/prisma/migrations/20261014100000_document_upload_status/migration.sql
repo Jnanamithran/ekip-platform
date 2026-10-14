@@ -1,0 +1,3 @@
+ALTER TABLE "Document"
+ADD COLUMN "status" TEXT NOT NULL DEFAULT 'Indexed',
+ADD COLUMN "chunk_count" INTEGER NOT NULL DEFAULT 0;
