@@ -1,371 +1,470 @@
-﻿# EKIP — Enterprise Knowledge Intelligence Platform
+# EKIP — Enterprise Knowledge Intelligence Platform
 
-> Final Year Engineering Project · B.Tech Computer Science · KTU
+EKIP is a multi-tenant document knowledge platform. Users upload supported
+documents, ask questions in natural language, and receive answers with source
+citations. The application includes a React frontend, an Express/Prisma API, a
+FastAPI AI service, PostgreSQL, Qdrant, and Ollama.
 
-EKIP is a multi-tenant enterprise knowledge platform that eliminates the hours employees waste searching across disconnected document systems. Upload PDFs, Word docs, and Excel sheets into one platform — then query everything in plain English and get trustworthy, source-cited answers in seconds, with access strictly enforced by role.
+The AI stack runs locally in Docker. It does **not** search the public web or
+send prompts to a hosted LLM API. It answers from the documents ingested into
+the EKIP knowledge base.
 
-This is **not** a PDF chatbot. It is a full enterprise knowledge operating system with role-based access control, hybrid retrieval, reranking, and citation-backed responses — built entirely on locally hosted AI with no external API dependency.
+## Contents
 
----
+- [How the system fits together](#how-the-system-fits-together)
+- [Requirements](#requirements)
+- [Run the complete project with Docker](#run-the-complete-project-with-docker)
+- [Run only the web application](#run-only-the-web-application-without-ai)
+- [Run services locally for development](#run-services-locally-for-development)
+- [AI and web access](#ai-and-web-access)
+- [Supported documents and current limitations](#supported-documents-and-current-limitations)
+- [Useful commands](#useful-commands)
+- [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout)
+- [Documentation](#documentation)
 
-## The Problem
+## How the system fits together
 
-Organizations store knowledge across multiple disconnected systems:
-
-- PDFs, Word documents
-- Excel sheets
-- Internal documentation and handbooks
-
-Employees waste hours searching across all of them. Traditional keyword search doesn't understand meaning. And nobody can tell if the answer is actually correct — there are no sources, and no access control.
-
-**EKIP solves this.** One platform. One search. Role-enforced. Always cited.
-
----
-
-## Platform Overview
-
-```
-Organization
-└── Workspace
-    └── Department
-        └── Users (Admin · Manager · Employee · Intern)
-            └── Documents (access enforced by role, before retrieval)
-```
-
-Every user belongs to a department with a role. Their role determines which documents they can search. **RBAC is enforced before retrieval** — unauthorized documents never reach the AI, not even to be filtered out afterwards. This is a structural guarantee, not a post-hoc check.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│               React · Vite · Tailwind            │  Frontend    (port 3000)
-└──────────────────────┬──────────────────────────┘
-                       │ HTTP
-┌──────────────────────▼──────────────────────────┐
-│         Node.js · Express · Prisma · JWT         │  Backend     (port 5000)
-│              PostgreSQL · RBAC Middleware         │
-└────────────┬────────────────────────────────────┘
-             │ Internal HTTP (RBAC context passed on every call)
-┌────────────▼─────────────────────────────────────┐
-│     Python · FastAPI · Sentence Transformers      │  AI Service  (port 8000)
-│     BM25 · RRF · Qdrant · Ollama · Reranker      │
-└───────────────────────────────────────────────────┘
+```text
+Browser
+  │
+  ├── React + Vite frontend ─────────────── http://localhost:5175
+  │       │
+  │       └── Express backend API ───────── http://localhost:5000
+  │                ├── PostgreSQL ───────── users, organizations, roles
+  │                └── FastAPI AI service ─ http://localhost:8000
+  │                         ├── Qdrant ──── document chunks and vectors
+  │                         └── Ollama ──── local llama3.2:3b model
 ```
 
----
+The backend verifies the user's JWT and derives organization, workspace,
+department, and role context before forwarding AI requests. The AI service
+uses that context to filter document chunks before retrieval.
 
-## Services
+| Service | Purpose | Host address / port | Started by default? |
+| --- | --- | --- | --- |
+| Frontend | React application served by Vite | `http://localhost:5175` | Yes |
+| Backend | Express API, authentication, authorization, AI proxy | `http://localhost:5000` | Yes |
+| PostgreSQL | Application relational database | `localhost:5432` | Yes |
+| AI service | Ingestion, retrieval, reranking, answer generation | `http://localhost:8000` | With the `ai` profile |
+| Qdrant | Vector storage and similarity search | `localhost:6333` | With the `ai` profile |
+| Ollama | Local LLM runtime | `localhost:11434` | With the `ai` profile |
 
-| Service    | Port  | Stack                                          | Status         |
-|------------|-------|------------------------------------------------|----------------|
-| Frontend   | 3000  | React, Vite, Tailwind CSS                      | In progress    |
-| Backend    | 5000  | Node.js, Express.js, Prisma, PostgreSQL, JWT   | In progress    |
-| AI Service | 8000  | Python, FastAPI, Sentence Transformers, Ollama | ✅ Core built   |
-| Qdrant     | 6333  | Vector database                                | ✅ Running      |
-| PostgreSQL | 5432  | Relational database                            | ✅ Running      |
-| Ollama     | 11434 | Local LLM runtime (model: llama3.2:3b)         | ✅ Running      |
+The Docker Compose frontend port defaults to **5175 on your computer** and
+**5173 inside its container**. Port 5173 is also the default when you run Vite
+directly on your computer.
 
----
+## Requirements
 
-## AI Pipeline (Phase 1)
+### Docker workflow (recommended)
 
-```
-Document Upload (PDF · DOCX · XLSX · TXT)
-      ↓
-File Type Detection
-(extension + magic byte signature verification — catches renamed/mislabeled files)
-      ↓
-Text Extraction per page
-(PyMuPDF for PDF, python-docx for DOCX, openpyxl for XLSX)
-(Scanned/image-only PDFs flagged → reserved for Phase 2 ColPali handling)
-      ↓
-Sliding Window Chunking
-(200 words/chunk, 40-word overlap, never crossing page boundaries)
-(Page-boundary safety ensures every chunk maps to exactly one source page for citation)
-      ↓
-Dense Embeddings
-(Sentence Transformers: all-MiniLM-L6-v2, 384-dim vectors → Qdrant)
-(RBAC metadata attached at write time: org_id, workspace_id, department_id, allowed_roles)
-      +
-Sparse Embeddings (BM25)
-      ↓
-RBAC Metadata Filter ← user's org/workspace/department/role checked HERE
-(Qdrant metadata-only query returns only authorized chunks — no vector search yet)
-(BM25 index built in-memory from this authorized set only — never scores unauthorized content)
-      ↓
-Hybrid Retrieval (Reciprocal Rank Fusion)
-(Fuses dense + sparse ranked lists by rank position, not raw score)
-      ↓
-Cross-Encoder Reranking
-(Re-scores top RRF candidates for final precision before LLM)
-      ↓
-Ollama LLM Generation (llama3.2:3b)
-(Grounded strictly in retrieved context — no hallucination from model's general knowledge)
-      ↓
-Citation Post-Processor
-(Maps each claim in the generated answer back to exact source chunk, filename, and page number)
-      ↓
-Answer + Sources
-```
+- Windows 10/11 with Docker Desktop installed and running.
+- Docker Desktop using the Linux/WSL 2 engine.
+- Git, if cloning the repository.
+- An internet connection for the initial Docker image, Python package, and
+  model downloads.
+- Enough free disk space for Docker images, Python/ML dependencies, and the
+  Ollama model. The AI image and model are large; the first build can take a
+  while.
 
-### Supported File Types (Phase 1)
+You do **not** need to install Node.js, Python, PostgreSQL, Qdrant, or Ollama on
+Windows when using Docker Compose.
 
-| Format | Parser     | Notes                                                                 |
-|--------|------------|-----------------------------------------------------------------------|
-| PDF    | PyMuPDF    | Text-based only. Scanned/image PDFs flagged for Phase 2.             |
-| DOCX   | python-docx| Paragraphs + table content extracted. Batched into pseudo-pages.     |
-| XLSX   | openpyxl   | Row-per-unit extraction. Sheet name + headers preserved per row.     |
-| TXT    | Built-in   | Multi-encoding fallback: UTF-8 → cp1252 → latin-1.                  |
+### Local application development
 
-> ⚠️ PPTX and CSV are **not** supported in Phase 1. PPTX is a Phase 2 target (ColPali handles slide layouts visually). CSV will be added alongside NL-to-SQL in Phase 2.
+If you want to run the frontend, backend, or AI service directly on Windows,
+install the relevant tools in addition to Docker Desktop:
 
----
+- Node.js 20 and npm (npm is included with Node.js).
+- Python 3.11 for the AI service. Use Python 3.11 for compatibility with the
+  pinned document-processing and machine-learning packages.
+- Docker Desktop for PostgreSQL, Qdrant, and Ollama, unless you install and
+  manage those services separately.
+- A browser and an editor such as VS Code.
 
-## Phase 2 — Multimodal Intelligence (Planned)
+## Run the complete project with Docker
 
-Phase 2 builds on the Phase 1 pipeline to handle documents where meaning lives in layout, not just text:
+These steps start the web app, backend, PostgreSQL, AI service, Qdrant, and
+Ollama.
 
-- **ColPali** — vision-based page embeddings; treats each PDF page as an image, handles scanned documents, charts, complex tables, and visual layouts that text extraction destroys
-- **Qwen2-VL** — multimodal LLM for answering questions about chart images, figures, and scanned page content
-- **NL-to-SQL** — structured database querying from plain English
-- **Document comparison** — diff citations across versions of the same document
-- **PPTX + CSV support** — rounds out the document type coverage
+### 1. Clone the repository and open the project root
 
----
+In PowerShell:
 
-## Why Local Models
-
-EKIP prioritizes locally hosted AI:
-
-- Enterprise data never leaves the server
-- No model training on company documents
-- Better compliance posture
-- Zero per-query API cost at scale
-
-LLM: `llama3.2:3b` via Ollama. Embedding model: `all-MiniLM-L6-v2` (Sentence Transformers, 384-dim). Both run fully locally.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- [Docker Desktop](https://www.docker.com/) — WSL 2 backend required on Windows
-- Git
-
-### Run with Docker
-
-```bash
-# Clone the repository
+```powershell
 git clone https://github.com/Jnanamithran/ekip-platform.git
 cd ekip-platform
-
-# Start all services
-docker-compose up --build
 ```
 
-First-time boot will be slow — the `ollama/ollama` image alone is ~3.2GB, and `ai-service` installs several large Python packages (notably `torch`). Subsequent boots use cached layers and are much faster.
+If you already have the repository, open PowerShell in its root directory
+(the directory containing `docker-compose.yml`).
 
-After boot, pull the LLM model into the Ollama container (required once):
+### 2. Start Docker Desktop
 
-```bash
-docker exec -it <ollama-container-name> ollama pull llama3.2:3b
+Open Docker Desktop and wait for it to report that the engine is running.
+Verify from PowerShell:
+
+```powershell
+docker info
+docker compose version
 ```
 
-| Service    | URL                       |
-|------------|---------------------------|
-| Frontend   | http://localhost:3000     |
-| Backend    | http://localhost:5000     |
-| AI Service | http://localhost:8000     |
-| Qdrant UI  | http://localhost:6333     |
+If `docker info` cannot connect to the Docker engine, start Docker Desktop
+before continuing.
 
-> **Note:** The backend (`src/index.js`) is not yet implemented — this is expected per the roadmap (v0.3 milestone). The backend container will fail to start until that work lands. All other services boot cleanly.
+### 3. Create the root `.env` file
 
-### AI Service (local development without Docker)
+Compose requires a private `JWT_SECRET`. The following PowerShell command
+creates a 32-byte random secret if the root `.env` does not already contain
+one:
 
-```bash
-cd apps/ai-service
+```powershell
+$hasSecret = $false
+if (Test-Path .env) {
+  $hasSecret = Select-String -Path .env -Pattern '^JWT_SECRET=' -Quiet
+}
+if (-not $hasSecret) {
+  $bytes = New-Object byte[] 32
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  $rng.GetBytes($bytes)
+  Add-Content -Path .env -Value "JWT_SECRET=$([Convert]::ToBase64String($bytes))" -Encoding ASCII
+  $rng.Dispose()
+}
+```
 
-# Create venv using Python 3.11 specifically
-# (Python 3.14+ lacks prebuilt wheels for pymupdf and sentence-transformers)
-py -3.11 -m venv venv
-.\venv\Scripts\Activate.ps1   # Windows
-source venv/bin/activate      # Linux/Mac
+Keep `.env` private; it is ignored by Git. The Compose frontend port defaults
+to 5175. To use a different available host port, add a line such as
+`FRONTEND_PORT=5176` to the root `.env`.
 
+### 4. Build and start every service
+
+From the project root:
+
+```powershell
+docker compose --profile ai up --build -d
+```
+
+The first build downloads and builds the Node and Python dependencies and
+Docker images. Leave it time to finish; the AI dependencies are substantially
+larger than the web application.
+
+Check container state:
+
+```powershell
+docker compose ps
+```
+
+Wait until PostgreSQL is healthy and the backend reports healthy. The AI
+service, Qdrant, and Ollama should report `Up`.
+
+### 5. Download the local language model
+
+Download the model into the persistent Ollama volume once:
+
+```powershell
+docker compose exec ollama ollama pull llama3.2:3b
+docker compose exec ollama ollama list
+```
+
+Model weights take several gigabytes to download. Subsequent starts reuse the
+named volume and do not require downloading the model again.
+
+### 6. Open the application and check service health
+
+- Sign up: <http://localhost:5175/signup>
+- Sign in: <http://localhost:5175/login>
+- Backend health: <http://localhost:5000/health>
+- AI service health: <http://localhost:8000/health>
+- Qdrant dashboard: <http://localhost:6333/dashboard>
+
+Create an organization and its first Admin account on the signup page. Then
+sign in and upload documents before asking document-related questions.
+
+### What runs, and what persists
+
+The `ai` profile starts the AI service, Qdrant, and Ollama in addition to the
+default frontend, backend, and PostgreSQL services. PostgreSQL migrations are
+applied by the backend container when it starts.
+
+Compose stores PostgreSQL data, Qdrant data, and Ollama models in named Docker
+volumes. Stopping the stack does not delete them. Avoid `docker compose down
+-v` unless you intentionally want to erase those databases, indexed documents,
+and downloaded model weights.
+
+## Run only the web application without AI
+
+For signup, login, and non-AI API development, start the default services:
+
+```powershell
+docker compose up --build -d
+```
+
+This starts the frontend, backend, and PostgreSQL. The search and document
+ingestion features need the AI profile, so those functions will not be
+available in this mode.
+
+To enable all features later:
+
+```powershell
+docker compose --profile ai up --build -d
+```
+
+Then pull the model if you have not already done so:
+
+```powershell
+docker compose exec ollama ollama pull llama3.2:3b
+```
+
+## Run services locally for development
+
+This option runs the application code on Windows while Docker provides
+PostgreSQL, Qdrant, and Ollama. Do not run Docker's backend or frontend at the
+same time as their local counterparts: they use the same host ports.
+
+### 1. Start database and AI infrastructure in Docker
+
+From the repository root:
+
+```powershell
+docker compose --profile ai up -d postgres qdrant ollama
+docker compose exec ollama ollama pull llama3.2:3b
+```
+
+The model pull is needed once. If the Ollama model is already present, check
+with `docker compose exec ollama ollama list` instead.
+
+### 2. Configure and start the backend
+
+Create `apps/backend/.env` with local connection settings:
+
+```dotenv
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ekip?schema=public
+JWT_SECRET=replace-with-a-private-random-secret
+PORT=5000
+FRONTEND_ORIGINS=http://localhost:5173,http://localhost:5175
+AI_SERVICE_URL=http://localhost:8000
+```
+
+Use a private random value for `JWT_SECRET`. The local backend loads this file
+when started from `apps/backend`.
+
+In a PowerShell window:
+
+```powershell
+cd D:\Program\ekip-platform\apps\backend
+npm ci
+npx prisma generate --schema src/prisma/schema.prisma
+npx prisma migrate deploy --schema src/prisma/schema.prisma
+npm run dev
+```
+
+Keep the backend terminal open. Check <http://localhost:5000/health>.
+
+### 3. Install and start the AI service
+
+Open another PowerShell window:
+
+```powershell
+cd D:\Program\ekip-platform\apps\ai-service
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+$env:QDRANT_URL = "http://localhost:6333"
+$env:OLLAMA_URL = "http://localhost:11434"
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
----
+Keep that terminal open. Check <http://localhost:8000/health>. The first
+AI-service run may download embedding and reranking model weights. If PowerShell
+blocks virtual-environment activation, allow local scripts for your user or
+activate the environment using your organization's approved method.
 
-## Project Structure
+### 4. Install and start the frontend
 
+Open a third PowerShell window:
+
+```powershell
+cd D:\Program\ekip-platform\apps\frontend
+npm ci
+npm run dev
 ```
+
+Open the URL Vite prints, usually <http://localhost:5173>. The checked-in
+`apps/frontend/.env` points the frontend at the local API on port 5000. If that
+file is missing, copy `.env.example` to `.env` in `apps/frontend`.
+
+### Local versus Docker URLs
+
+Inside the Compose network, services reach one another by service name:
+
+- Backend to PostgreSQL: `postgres:5432`
+- Backend to AI service: `ai-service:8000`
+- AI service to Qdrant: `qdrant:6333`
+- AI service to Ollama: `ollama:11434`
+
+Processes running directly on Windows must use `localhost` and the published
+host ports instead.
+
+## AI and web access
+
+**The AI does not browse or search the public internet.** It retrieves chunks
+from documents that have been uploaded and indexed in Qdrant, then uses the
+local Ollama `llama3.2:3b` model to draft a response with citations. The
+embedding and reranking models also run in the AI service.
+
+An internet connection is still useful or required for initial setup to
+download Docker images, npm/Python packages, Hugging Face model weights, and
+the Ollama model. Those downloads are separate from question answering; the
+application does not use an internet-search API or a hosted LLM API for its
+normal AI query flow.
+
+## Supported documents and current limitations
+
+The AI ingestion code supports:
+
+| File type | Extraction |
+| --- | --- |
+| PDF | Text-based PDFs; scanned/image-only PDFs need OCR, which is not included |
+| DOCX | Word paragraphs and tables |
+| XLSX | Spreadsheet content |
+| TXT | Plain text |
+
+PPTX and CSV are not currently supported. Search answers only from indexed,
+authorized content.
+
+**Known ingestion limitation:** the AI endpoint receives an uploaded file but
+currently passes the client-provided filename to a parser that expects a
+filesystem path. The file bytes are not first written to that path. As a
+result, the upload-to-index flow may fail until the AI endpoint saves the
+uploaded content before parsing it. The upload screen is connected to the
+endpoint, but do not treat successful indexing as verified yet.
+
+The Admin API supports user, workspace, and department operations. The
+frontend's administration screens currently focus on displaying available
+data; not every management operation has a UI.
+
+## Useful commands
+
+Run these commands from the repository root:
+
+```powershell
+# Start the full stack, including AI
+docker compose --profile ai up --build -d
+
+# Show container state
+docker compose ps
+
+# Follow all service logs
+docker compose logs -f
+
+# Follow a specific service
+docker compose logs -f backend
+docker compose logs -f ai-service
+docker compose logs -f frontend
+
+# Stop containers; named volumes and their data are retained
+docker compose down
+```
+
+Build the frontend or run its linter from the root:
+
+```powershell
+npm --prefix apps/frontend run build
+npm --prefix apps/frontend run lint
+```
+
+## Troubleshooting
+
+### Docker cannot start the backend: port 5000 is already in use
+
+A locally running Node backend or another process is already bound to the API
+port. Stop the local backend with `Ctrl+C` in its terminal, then retry:
+
+```powershell
+docker compose --profile ai up -d
+```
+
+To identify the process holding the port:
+
+```powershell
+Get-NetTCPConnection -State Listen -LocalPort 5000 |
+  Select-Object LocalAddress, LocalPort, OwningProcess
+Get-Process -Id <OwningProcess>
+```
+
+Stop only the process you have identified and intend to stop.
+
+### Prisma says `DATABASE_URL` is missing during local development
+
+Create `apps/backend/.env` as shown in [Run services locally for
+development](#run-services-locally-for-development). Compose supplies its own
+database URL to the backend container; that environment is not automatically
+available to a Prisma command run directly on Windows.
+
+### Backend or frontend is not running
+
+Check container status and logs:
+
+```powershell
+docker compose ps -a
+docker compose logs --tail 100 backend frontend postgres
+```
+
+The frontend waits for a healthy backend. The backend waits for healthy
+PostgreSQL and applies migrations at startup.
+
+### Search or upload reports that the AI service is unavailable
+
+Start the AI profile and confirm all its services are running:
+
+```powershell
+docker compose --profile ai up -d
+docker compose ps
+docker compose logs --tail 100 ai-service ollama qdrant
+```
+
+Confirm the local model is present:
+
+```powershell
+docker compose exec ollama ollama list
+```
+
+If needed, download it with `docker compose exec ollama ollama pull
+llama3.2:3b`.
+
+### Frontend opens on a different port
+
+Docker uses host port 5175 by default. If you set `FRONTEND_PORT` in the root
+`.env`, open that port instead. Local Vite normally uses port 5173.
+
+### Reset all data
+
+`docker compose down` stops and removes containers but retains named volumes.
+To permanently remove the PostgreSQL database, Qdrant index, and Ollama model
+files as well, `docker compose down -v` deletes those volumes. This cannot be
+undone.
+
+## Project layout
+
+```text
 ekip-platform/
 ├── apps/
-│   ├── ai-service/        # Python · FastAPI · Qdrant · Ollama
-│   │   ├── ingestion/     # ✅ File type detection + text extraction
-│   │   ├── chunking/      # ✅ Sliding window chunker
-│   │   ├── embeddings/    # ✅ Sentence Transformers + Qdrant storage
-│   │   ├── retrieval/     # ✅ BM25 + RBAC filter
-│   │   ├── reranking/     # ⬜ Cross-encoder (in progress)
-│   │   ├── generation/    # ⬜ Ollama generation (in progress)
-│   │   └── citations/     # ⬜ Citation post-processor (in progress)
-│   ├── backend/           # ⬜ Node.js · Express · Prisma (v0.3)
-│   └── frontend/          # ⬜ React · Vite · Tailwind (v0.4)
-├── docs/
-│   ├── 01_Project_Handbook.md
-│   ├── 02_Development_Handbook.md
-│   ├── 03_Git_and_GitHub_Handbook.md
-│   ├── 04_AI_Assisted_Development_Handbook.md
-│   ├── 05_System_Architecture.md
-│   ├── 06_Backend_Handbook.md
-│   ├── 07_Frontend_Handbook.md
-│   ├── 08_AI_Handbook.md
-│   ├── 09_Database_and_Testing_Handbook.md
-│   ├── 10_Deployment_Handbook.md
-│   ├── 11_Project_Roadmap.md
-│   └── 12_Feature_Handbook.md
-├── docker-compose.yml
-├── .editorconfig          # Enforces UTF-8 (no BOM), LF line endings across the team
-└── .github/
-    └── PULL_REQUEST_TEMPLATE.md
+│   ├── frontend/       # React, Vite, Tailwind UI
+│   ├── backend/        # Express API, JWT auth, Prisma schema/migrations
+│   └── ai-service/     # FastAPI, ingestion, retrieval, generation, citations
+├── docs/               # Project, architecture, API, AI, and deployment guides
+├── docker-compose.yml  # Local multi-service stack
+└── README.md
 ```
-
----
 
 ## Documentation
 
-| Handbook | Description |
-|----------|-------------|
-| [Project Handbook](docs/01_Project_Handbook.md) | Vision, goals, team philosophy |
-| [System Architecture](docs/05_System_Architecture.md) | Full system design, component interactions, data flow |
-| [Backend Handbook](docs/06_Backend_Handbook.md) | API routes, auth, RBAC, request/response formats |
-| [Frontend Handbook](docs/07_Frontend_Handbook.md) | Components, pages, protected routes, UX flows |
-| [AI Handbook](docs/08_AI_Handbook.md) | Pipeline design, retrieval strategy, model decisions, evaluation |
-| [DB & Testing Handbook](docs/09_Database_and_Testing_Handbook.md) | Schema, migrations, indexes, test coverage |
-| [Deployment Handbook](docs/10_Deployment_Handbook.md) | Docker Compose setup, known issues and fixes |
-| [Project Roadmap](docs/11_Project_Roadmap.md) | Phase 1 versions (v0.1–v0.5) and Phase 2 milestones |
-
----
-
-## Versioning
-
-Phase 1 is built continuously on `main` and checkpointed at 5 git-tagged versions tied to department presentations:
-
-| Tag   | Name | What it proves |
-|-------|------|----------------|
-| v0.1  | Core AI Pipeline | Ingest → chunk → embed → RBAC-filtered retrieval |
-| v0.2  | AI Reasoning Complete | Hybrid retrieval + reranking + generation + citations |
-| v0.3  | Auth + Multi-tenancy | Real JWT auth, Postgres schema, RBAC from live sessions |
-| v0.4  | Usable Product | Full React UI — login, upload, search, cited answers |
-| v0.5  | Phase 1 Complete | Full docker-compose stack verified, CI green, docs done |
-
-To check out a version for demo:
-
-```bash
-git checkout v0.2   # detached HEAD — safe for demo, not for editing
-git checkout main   # return to active development
-```
-
----
-
-## Git Workflow
-
-`main` is **protected**. No direct pushes. All changes go through a feature branch and a reviewed Pull Request.
-
-```bash
-git checkout main && git pull origin main
-git checkout -b ai/your-feature-name
-# write code, test it, document it
-git add .
-git commit -m "feat(ai): short description"
-git push origin ai/your-feature-name
-# open Pull Request → request review from AI Lead → wait for approval
-```
-
-### Branch Naming
-
-| Prefix      | Used For              | Example                        |
-|-------------|-----------------------|--------------------------------|
-| `ai/`       | AI pipeline work      | `ai/hybrid-retrieval-rrf`      |
-| `backend/`  | Backend features      | `backend/auth-middleware`      |
-| `frontend/` | Frontend features     | `frontend/chat-interface`      |
-| `devops/`   | Infra, CI, testing    | `devops/github-actions-ci`     |
-| `docs/`     | Documentation updates | `docs/update-ai-handbook`      |
-| `fix/`      | Bug fixes             | `fix/qdrant-rbac-filter`       |
-| `test/`     | Tests only            | `test/auth-integration`        |
-
-### Commit Format
-
-```
-feat(ai): add hybrid retrieval with RRF fusion
-fix(frontend): resolve port mismatch on docker boot
-docs(deployment): document known issues and fixes
-test(ingestion): add pytest coverage for PDF parser
-chore(devops): add GitHub Actions CI pipeline
-```
-
----
-
-## Team
-
-| Role | Owns |
-|------|------|
-| **AI Lead & Project Lead** | AI pipeline (all 9 steps), system architecture, PR reviews for all members, team coordination |
-| **Backend Developer** | Express APIs, JWT auth, RBAC middleware, Postgres schema, AI service integration |
-| **Frontend Developer** | React UI, Tailwind, protected routes, auth UX, citation display, role-aware views |
-| **Database & Testing Engineer** | Prisma migrations, unit tests, CI/CD, docker-compose verification, RBAC leakage testing |
-
-All PRs require review and approval from the AI Lead before merging.
-
----
-
-## Roadmap
-
-### Phase 1 — Core Platform (In Progress)
-
-**v0.1 — Core AI Pipeline**
-- [x] Repository setup, folder structure, branch protection
-- [x] Document ingestion (PDF, DOCX, XLSX, TXT)
-- [x] Sliding window chunking with page-boundary safety
-- [x] Dense embeddings (all-MiniLM-L6-v2 → Qdrant, RBAC metadata at write time)
-- [x] BM25 sparse retrieval + RBAC metadata filter (in-memory, scoped to authorized chunks only)
-
-**v0.2 — AI Reasoning Complete**
-- [ ] Hybrid retrieval (Reciprocal Rank Fusion of dense + sparse)
-- [ ] Cross-encoder reranking
-- [ ] Ollama LLM generation (llama3.2:3b) with structured prompt template
-- [ ] Citation post-processor (maps answer claims to exact source chunks + pages)
-
-**v0.3 — Auth + Multi-tenancy**
-- [ ] PostgreSQL schema + Prisma migrations (Org → Workspace → Department → User)
-- [ ] JWT authentication and RBAC middleware
-- [ ] FastAPI endpoints exposed (/ingest, /query) — RBAC context from real sessions
-- [ ] Backend Express API wired to AI service
-
-**v0.4 — Usable Product**
-- [ ] React dashboard with AI chat/search interface
-- [ ] Document upload UI
-- [ ] Results display with visible source citations
-- [ ] Role-aware UI (Intern vs. Admin views differ)
-
-**v0.5 — Phase 1 Complete**
-- [ ] Full docker-compose stack verified end-to-end
-- [ ] CI green across all services
-- [ ] RBAC leakage tests passing
-- [ ] All documentation complete
-
-### Phase 2 — Multimodal Intelligence (Planned)
-- [ ] ColPali integration (vision-based page embeddings for scanned docs)
-- [ ] Qwen2-VL (multimodal LLM for charts, figures, and visual layouts)
-- [ ] NL-to-SQL for structured database querying
-- [ ] Document comparison with diff citations
-- [ ] PPTX and CSV support
-
----
-
-## License
-
-This project is developed as a Final Year Engineering Project under KTU (APJ Abdul Kalam Technological University). All rights reserved.
+- [Project Handbook](docs/01_Project_Handbook.md)
+- [System Architecture](docs/05_System_Architecture.md)
+- [Backend Handbook](docs/06_Backend_Handbook.md)
+- [Frontend Handbook](docs/07_Frontend_Handbook.md)
+- [AI Handbook](docs/08_AI_Handbook.md)
+- [Database and Testing Handbook](docs/09_Database_and_Testing_Handbook.md)
+- [Deployment Handbook](docs/10_Deployment_Handbook.md)
+- [Project Roadmap](docs/11_Project_Roadmap.md)
