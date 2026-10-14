@@ -164,11 +164,15 @@ export async function registerOrganization(payload) {
  * Backend route: POST /ai/ask
  * Response: { answer, sources: [{ id, filename, page, excerpt }], model, has_answer }
  */
-export async function askQuestion(query) {
+export async function askQuestion(query, requestId) {
     return apiFetch('/ai/ask', {
         method: 'POST',
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, request_id: requestId }),
     });
+}
+
+export async function getAskProgress(requestId) {
+    return apiFetch('/ai/ask/progress/' + encodeURIComponent(requestId));
 }
 
 /**
@@ -179,11 +183,60 @@ export async function askQuestion(query) {
  * Backend route: POST /ai/ingest (multipart/form-data)
  * Response: { message, document_id, filename, chunk_count, status }
  */
-export async function uploadDocument(file) {
+function sendDocumentUpload(formData, token, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', API_URL + '/ai/ingest');
+        if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+
+        xhr.upload.addEventListener('progress', (event) => {
+            if (event.lengthComputable) {
+                onProgress(Math.round((event.loaded / event.total) * 100));
+            }
+        });
+
+        xhr.addEventListener('load', () => {
+            let data = null;
+            try {
+                data = JSON.parse(xhr.responseText);
+            } catch {
+                // The status below reports a useful failure for non-JSON responses.
+            }
+
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(data);
+            } else {
+                reject(Object.assign(new Error(data?.error ?? 'Request failed (' + xhr.status + ')'), {
+                    status: xhr.status,
+                }));
+            }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('Network error while uploading document')));
+        xhr.addEventListener('abort', () => reject(new Error('Document upload was cancelled')));
+        xhr.send(formData);
+    });
+}
+
+export async function uploadDocument(file, onProgress = () => {}) {
     const formData = new FormData();
     formData.append('file', file);
-    return apiFetch('/ai/ingest', {
-        method: 'POST',
-        body: formData,
+
+    try {
+        return await sendDocumentUpload(formData, accessToken, onProgress);
+    } catch (err) {
+        if (err.status !== 401) throw err;
+        const newToken = await refreshAccessToken();
+        return sendDocumentUpload(formData, newToken, onProgress);
+    }
+}
+
+export async function getDocuments() {
+    return apiFetch('/ai/documents');
+}
+
+export async function deleteDocument(id) {
+    return apiFetch('/ai/documents/' + encodeURIComponent(id), {
+        method: 'DELETE',
     });
 }
