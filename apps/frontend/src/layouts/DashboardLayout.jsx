@@ -4,10 +4,8 @@ import { navForRole } from "../lib/nav";
 import Avatar from "../components/ui/Avatar";
 import { RoleBadge } from "../components/ui/Badge";
 
-const ALL_ROLES = ["Admin", "Manager", "Employee", "Intern"];
-
 export default function DashboardLayout() {
-  const { user, switchRole, logout } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
 
   // RequireAuth (in App.jsx) already guarantees `user` exists before
@@ -63,24 +61,6 @@ export default function DashboardLayout() {
             </div>
             <RoleBadge role={user.role} />
           </div>
-
-          {/* DEMO-ONLY control — lets you show RBAC differences live
-              without logging in and out four times. Remove once
-              real auth (v0.3) makes this unnecessary. */}
-          <label className="flex items-center gap-2 text-xs text-slate-light">
-            Demo: view as
-            <select
-              value={user.role}
-              onChange={(e) => switchRole(e.target.value)}
-              className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs text-ink"
-            >
-              {ALL_ROLES.map((role) => (
-                <option key={role} value={role}>
-                  {role}
-                </option>
-              ))}
-            </select>
-          </label>
         </header>
 
         <main className="flex-1 px-6 py-8">
