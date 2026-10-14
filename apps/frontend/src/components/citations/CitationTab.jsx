@@ -1,13 +1,3 @@
-/**
- * The platform's signature element. Renders a source citation as
- * a small "index card tab" — amber signal color, mono metadata —
- * so a user learns fast: amber + monospace = this is a real,
- * traceable source, not generated text.
- *
- * Shape assumed for `source` (confirm against real API once the
- * Step 9 contract lands — this is a mock-driven guess):
- *   { id, filename, page, excerpt }
- */
 export default function CitationTab({ source, index }) {
   return (
     <details className="group rounded-md border border-signal/30 bg-signal-soft/60">

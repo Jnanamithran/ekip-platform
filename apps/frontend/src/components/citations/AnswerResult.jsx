@@ -1,13 +1,6 @@
 import Card from "../ui/Card";
 import CitationTab from "./CitationTab";
 
-/**
- * Renders one query result: generated answer + its source list.
- * Designed against the SHAPE Jnani described (answer + citations
- * with filename/page/excerpt), not a confirmed contract yet.
- * Swap `result` for the real API response once Step 9 lands —
- * the component doesn't need to change, only the data source.
- */
 export default function AnswerResult({ result }) {
   const { answer, sources = [] } = result;
 

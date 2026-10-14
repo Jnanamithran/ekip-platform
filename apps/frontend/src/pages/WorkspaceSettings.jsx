@@ -1,8 +1,34 @@
+import { useEffect, useState } from "react";
+import { apiFetch } from "../lib/apiClient";
 import Card from "../components/ui/Card";
-import Input from "../components/ui/Input";
-import Button from "../components/ui/Button";
 
 export default function WorkspaceSettings() {
+  const [workspaces, setWorkspaces] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    Promise.all([apiFetch("/admin/workspaces"), apiFetch("/admin/departments")])
+      .then(([workspaceResult, departmentResult]) => {
+        if (!active) return;
+        setWorkspaces(workspaceResult.workspaces);
+        setDepartments(departmentResult.departments);
+      })
+      .catch((err) => {
+        if (active) setError(err.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
       <div>
@@ -12,26 +38,38 @@ export default function WorkspaceSettings() {
         </p>
       </div>
 
-      <Card className="flex flex-col gap-4 p-5">
-        <Input id="ws-name" label="Workspace name" defaultValue="Acme Corp — IT" />
-        <Input
-          id="ws-domain"
-          label="Allowed email domain"
-          defaultValue="acmecorp.com"
-        />
-        <div className="flex items-center justify-between rounded-md border border-hairline px-3 py-2">
-          <div>
-            <p className="text-sm font-medium text-ink-soft">
-              Require pre-approval for Intern uploads
-            </p>
-            <p className="text-xs text-slate">
-              Documents uploaded by Interns are queued for Manager review.
-            </p>
-          </div>
-          <input type="checkbox" defaultChecked className="h-4 w-4 accent-index" />
+      {loading ? (
+        <p className="text-sm text-slate">Loading workspace data…</p>
+      ) : error ? (
+        <p className="text-sm text-danger">{error}</p>
+      ) : (
+        <div className="grid gap-6 md:grid-cols-2">
+          <Card className="divide-y divide-hairline">
+            <h2 className="px-4 py-3 text-sm font-medium text-ink">Workspaces</h2>
+            {workspaces.length ? (
+              workspaces.map((workspace) => (
+                <p key={workspace.id} className="px-4 py-3 text-sm text-slate">
+                  {workspace.name}
+                </p>
+              ))
+            ) : (
+              <p className="px-4 py-3 text-sm text-slate">No workspaces found.</p>
+            )}
+          </Card>
+          <Card className="divide-y divide-hairline">
+            <h2 className="px-4 py-3 text-sm font-medium text-ink">Departments</h2>
+            {departments.length ? (
+              departments.map((department) => (
+                <p key={department.id} className="px-4 py-3 text-sm text-slate">
+                  {department.name}
+                </p>
+              ))
+            ) : (
+              <p className="px-4 py-3 text-sm text-slate">No departments found.</p>
+            )}
+          </Card>
         </div>
-        <Button className="self-start">Save changes</Button>
-      </Card>
+      )}
     </div>
   );
 }

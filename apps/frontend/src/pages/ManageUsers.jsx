@@ -7,13 +7,25 @@ import Avatar from "../components/ui/Avatar";
 export default function ManageUsers() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
+    let active = true;
+
     apiFetch("/admin/users")
-      .then((data) => setUsers(data.users ?? []))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (active) setUsers(data.users ?? []);
+      })
+      .catch((err) => {
+        if (active) setError(err.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   return (
@@ -25,33 +37,28 @@ export default function ManageUsers() {
         </p>
       </div>
 
-      {loading && (
-        <p className="text-sm text-slate">Loading users…</p>
-      )}
-
-      {error && (
-        <p className="text-sm text-danger">Failed to load users: {error}</p>
-      )}
-
-      {!loading && !error && (
-        <Card className="divide-y divide-hairline">
-          {users.length === 0 && (
-            <div className="px-4 py-8 text-center text-sm text-slate">
-              No users found.
-            </div>
-          )}
-          {users.map((u) => (
-            <div key={u.id} className="flex items-center gap-3 px-4 py-3">
-              <Avatar name={u.name ?? u.email} size="sm" />
+      <Card className="divide-y divide-hairline">
+        {loading ? (
+          <p className="px-4 py-6 text-sm text-slate">Loading users…</p>
+        ) : error ? (
+          <p className="px-4 py-6 text-sm text-danger">Failed to load users: {error}</p>
+        ) : users.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-slate">No users found.</p>
+        ) : (
+          users.map((user) => (
+            <div key={user.id} className="flex items-center gap-3 px-4 py-3">
+              <Avatar name={user.name ?? user.email} size="sm" />
               <div className="flex flex-1 flex-col">
-                <span className="text-sm font-medium text-ink">{u.name ?? u.email}</span>
-                <span className="text-xs text-slate">{u.department ?? u.department_id}</span>
+                <span className="text-sm font-medium text-ink">{user.name ?? user.email}</span>
+                <span className="text-xs text-slate">
+                  {user.department ?? user.department_id}
+                </span>
               </div>
-              <RoleBadge role={u.role} />
+              <RoleBadge role={user.role} />
             </div>
-          ))}
-        </Card>
-      )}
+          ))
+        )}
+      </Card>
     </div>
   );
 }

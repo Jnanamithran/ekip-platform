@@ -3,12 +3,6 @@ import { askQuestion } from "../lib/apiClient";
 import AnswerResult from "../components/citations/AnswerResult";
 import Button from "../components/ui/Button";
 
-const SUGGESTIONS = [
-  "What's the hotel cap under the travel policy?",
-  "How much paid leave do I accrue per month?",
-  "Walk me through new hire onboarding.",
-];
-
 export default function Search() {
   const [query, setQuery] = useState("");
   const [history, setHistory] = useState([]); // [{ query, result }]
@@ -55,25 +49,6 @@ export default function Search() {
           {loading ? "Searching\u2026" : "Ask"}
         </Button>
       </form>
-
-      {history.length === 0 && !loading && (
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-light">
-            Try asking
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {SUGGESTIONS.map((s) => (
-              <button
-                key={s}
-                onClick={() => runQuery(s)}
-                className="rounded-full border border-hairline bg-paper-raised px-3 py-1.5 text-xs text-slate hover:border-index hover:text-index"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="flex flex-col gap-4">
         {history.map((entry, i) => (
