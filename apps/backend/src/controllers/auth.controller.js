@@ -64,6 +64,46 @@ async function login(req, res) {
   }
 }
 
+async function getMe(req, res) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.user_id },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        department_id: true,
+        department: {
+          select: {
+            name: true,
+            workspace_id: true,
+            workspace: { select: { org_id: true } },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      user: {
+        user_id: user.id,
+        email: user.email,
+        role: user.role,
+        department: user.department.name,
+        department_id: user.department_id,
+        workspace_id: user.department.workspace_id,
+        org_id: user.department.workspace.org_id,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
 // Swap a valid refresh token for a new access token.
 // The old refresh token is deleted and a new one issued ("rotation"),
 // so a stolen token can only be used once.
@@ -121,4 +161,4 @@ async function logout(req, res) {
   }
 }
 
-module.exports = { login, refresh, logout };
+module.exports = { login, getMe, refresh, logout };
