@@ -16,8 +16,8 @@ export default function DashboardLayout() {
   const items = navForRole(user.role);
 
   return (
-    <div className="flex min-h-screen bg-paper">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-paper-raised">
+    <div className="flex h-dvh overflow-hidden bg-paper">
+      <aside className="flex h-full w-60 shrink-0 flex-col border-r border-hairline bg-paper-raised">
         <div className="px-5 py-5">
           <span className="font-display text-lg text-ink">EKIP</span>
         </div>
@@ -51,7 +51,7 @@ export default function DashboardLayout() {
         </div>
       </aside>
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-hairline bg-paper-raised px-6 py-3">
           <div className="flex items-center gap-3">
             <Avatar name={user.email || user.name} />
@@ -63,7 +63,7 @@ export default function DashboardLayout() {
           </div>
         </header>
 
-        <main className="flex-1 px-6 py-8">
+        <main className="flex-1 min-h-0 overflow-y-auto px-6 py-8">
           <Outlet />
         </main>
       </div>
