@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { askEkip } from "../mocks/queryResults";
+import { apiFetch } from "../lib/apiClient";
 import AnswerResult from "../components/citations/AnswerResult";
 import Button from "../components/ui/Button";
 
@@ -8,6 +8,14 @@ const SUGGESTIONS = [
   "How much paid leave do I accrue per month?",
   "Walk me through new hire onboarding.",
 ];
+
+async function askEkip(query) {
+  const data = await apiFetch("/query", {
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
+  return data;
+}
 
 export default function Search() {
   const [query, setQuery] = useState("");
@@ -19,9 +27,23 @@ export default function Search() {
     if (!trimmed || loading) return;
     setLoading(true);
     setQuery("");
-    const result = await askEkip(trimmed);
-    setHistory((h) => [...h, { query: trimmed, result }]);
-    setLoading(false);
+    try {
+      const result = await askEkip(trimmed);
+      setHistory((h) => [...h, { query: trimmed, result }]);
+    } catch (err) {
+      setHistory((h) => [
+        ...h,
+        {
+          query: trimmed,
+          result: {
+            answer: `Something went wrong: ${err.message}`,
+            sources: [],
+          },
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
