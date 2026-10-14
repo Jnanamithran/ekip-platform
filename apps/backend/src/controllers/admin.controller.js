@@ -102,4 +102,43 @@ async function listUsers(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
-module.exports = { createUser, listUsers };
+// POST /admin/workspaces  (Admin only)
+async function createWorkspace(req, res) {
+  try {
+    const { name } = req.body || {};
+
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'name is required' });
+    }
+
+    // org_id comes from the token, never from the request body,
+    // so an admin can only create workspaces in their own organization
+    const workspace = await prisma.workspace.create({
+      data: { name: name.trim(), org_id: req.user.org_id },
+      select: { id: true, name: true, org_id: true },
+    });
+
+    res.status(201).json({ workspace });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+// GET /admin/workspaces  (Admin only)
+// Lists the workspaces of the admin's own organization
+async function listWorkspaces(req, res) {
+  try {
+    const workspaces = await prisma.workspace.findMany({
+      where: { org_id: req.user.org_id },
+      select: { id: true, name: true, org_id: true },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ workspaces });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+module.exports = { createUser, listUsers, createWorkspace, listWorkspaces };
