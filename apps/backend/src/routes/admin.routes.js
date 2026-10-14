@@ -5,6 +5,8 @@ const {
   listUsers,
   createWorkspace,
   listWorkspaces,
+  getWorkspaceDashboard,
+  updateWorkspace,
   createDepartment,
   listDepartments,
 } = require('../controllers/admin.controller');
@@ -19,6 +21,8 @@ router.get('/users', listUsers);
 
 router.post('/workspaces', createWorkspace);
 router.get('/workspaces', listWorkspaces);
+router.get('/workspaces/:workspaceId', getWorkspaceDashboard);
+router.patch('/workspaces/:workspaceId', updateWorkspace);
 
 router.post('/departments', createDepartment);
 router.get('/departments', listDepartments);

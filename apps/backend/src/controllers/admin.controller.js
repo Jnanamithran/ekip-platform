@@ -141,6 +141,89 @@ async function listWorkspaces(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
+
+// GET /admin/workspaces/:workspaceId (Admin only)
+async function getWorkspaceDashboard(req, res) {
+  try {
+    const workspace = await prisma.workspace.findFirst({
+      where: { id: req.params.workspaceId, org_id: req.user.org_id },
+      select: {
+        id: true,
+        name: true,
+        organization: { select: { name: true } },
+        departments: {
+          orderBy: { name: 'asc' },
+          select: {
+            id: true,
+            name: true,
+            _count: { select: { users: true, documents: true } },
+            users: {
+              orderBy: { email: 'asc' },
+              select: { id: true, email: true, role: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!workspace) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+
+    const departments = workspace.departments.map((department) => ({
+      id: department.id,
+      name: department.name,
+      member_count: department._count.users,
+      document_count: department._count.documents,
+      members: department.users,
+    }));
+
+    res.json({
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        organization_name: workspace.organization.name,
+        departments,
+        stats: {
+          members: departments.reduce((total, department) => total + department.member_count, 0),
+          departments: departments.length,
+          documents: departments.reduce((total, department) => total + department.document_count, 0),
+        },
+      },
+    });
+  } catch (err) {
+    console.error('[admin] workspace dashboard lookup failed:', err.message);
+    res.status(500).json({ error: 'Failed to load workspace dashboard' });
+  }
+}
+
+// PATCH /admin/workspaces/:workspaceId (Admin only)
+async function updateWorkspace(req, res) {
+  const { name } = req.body || {};
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 120) {
+    return res.status(400).json({ error: 'Workspace name must be between 1 and 120 characters' });
+  }
+
+  try {
+    const result = await prisma.workspace.updateMany({
+      where: { id: req.params.workspaceId, org_id: req.user.org_id },
+      data: { name: name.trim() },
+    });
+    if (!result.count) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: req.params.workspaceId },
+      select: { id: true, name: true },
+    });
+    res.json({ workspace });
+  } catch (err) {
+    console.error('[admin] workspace update failed:', err.message);
+    res.status(500).json({ error: 'Failed to update workspace' });
+  }
+}
+
 // POST /admin/departments  (Admin only)
 async function createDepartment(req, res) {
   try {
@@ -199,6 +282,8 @@ module.exports = {
   listUsers,
   createWorkspace,
   listWorkspaces,
+  getWorkspaceDashboard,
+  updateWorkspace,
   createDepartment,
   listDepartments,
 };
