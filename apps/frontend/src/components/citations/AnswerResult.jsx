@@ -10,6 +10,12 @@ export default function AnswerResult({ result }) {
         {answer}
       </p>
 
+      {result.answer_summary && (
+        <p className="mt-3 text-xs text-slate" aria-label="Answer basis">
+          {result.answer_summary}
+        </p>
+      )}
+
       {sources.length > 0 && (
         <div className="mt-4 flex flex-col gap-2">
           <span className="text-xs font-medium uppercase tracking-wide text-slate-light">
