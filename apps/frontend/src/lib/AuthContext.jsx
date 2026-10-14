@@ -1,40 +1,45 @@
-import { createContext, useContext, useState } from "react";
-import { mockUsers } from "../mocks/queryResults";
+import { createContext, useContext, useEffect, useState } from "react";
+import * as api from "./apiClient";
 
 const AuthContext = createContext(null);
 
-/**
- * MOCK auth only — no real backend yet (that's v0.3). Holds the
- * "logged in" user in memory and exposes switchRole() purely so
- * we can demo RBAC differences live without four separate logins.
- * Replace login()'s body with a real POST /auth/login in v0.3;
- * the shape consumers use (user, login, logout) should stay stable.
- */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  // true until we've checked whether an existing refresh token can
+  // restore a session — App.jsx must wait on this before redirecting
+  // anyone to /login, or a valid session gets kicked out on reload.
+  const [loading, setLoading] = useState(true);
 
-  function login(email) {
-    // Demo-only: match by email prefix against mock users, or
-    // default to the first (Admin) so the login form always works.
-    const match =
-      mockUsers.find((u) =>
-        u.name.toLowerCase().startsWith(email.split("@")[0].toLowerCase())
-      ) ?? mockUsers[0];
-    setUser(match);
-    return match;
+  useEffect(() => {
+    (async () => {
+      if (!api.getRefreshToken()) {
+        setLoading(false);
+        return;
+      }
+      try {
+        setUser(await api.restoreSession());
+      } catch {
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  async function doLogin(email, password) {
+    await api.login(email, password);
+    const me = await api.getMe();
+    setUser(me);
+    return me;
   }
 
-  function logout() {
+  async function doLogout() {
+    await api.logout();
     setUser(null);
   }
 
-  function switchRole(role) {
-    const match = mockUsers.find((u) => u.role === role);
-    if (match) setUser(match);
-  }
-
   return (
-    <AuthContext.Provider value={{ user, login, logout, switchRole }}>
+    <AuthContext.Provider value={{ user, loading, login: doLogin, logout: doLogout }}>
       {children}
     </AuthContext.Provider>
   );

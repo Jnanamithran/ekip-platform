@@ -40,7 +40,7 @@ Every user belongs to a department with a role. Their role determines which docu
 
 ```
 ┌─────────────────────────────────────────────────┐
-│               React · Vite · Tailwind            │  Frontend    (port 3000)
+│               React · Vite · Tailwind            │  Frontend    (port 5173)
 └──────────────────────┬──────────────────────────┘
                        │ HTTP
 ┌──────────────────────▼──────────────────────────┐
@@ -60,7 +60,7 @@ Every user belongs to a department with a role. Their role determines which docu
 
 | Service    | Port  | Stack                                          | Status         |
 |------------|-------|------------------------------------------------|----------------|
-| Frontend   | 3000  | React, Vite, Tailwind CSS                      | In progress    |
+| Frontend   | 5173  | React, Vite, Tailwind CSS                      | In progress    |
 | Backend    | 5000  | Node.js, Express.js, Prisma, PostgreSQL, JWT   | In progress    |
 | AI Service | 8000  | Python, FastAPI, Sentence Transformers, Ollama | ✅ Core built   |
 | Qdrant     | 6333  | Vector database                                | ✅ Running      |
@@ -176,7 +176,7 @@ docker exec -it <ollama-container-name> ollama pull llama3.2:3b
 
 | Service    | URL                       |
 |------------|---------------------------|
-| Frontend   | http://localhost:3000     |
+| Frontend   | http://localhost:5173     |
 | Backend    | http://localhost:5000     |
 | AI Service | http://localhost:8000     |
 | Qdrant UI  | http://localhost:6333     |

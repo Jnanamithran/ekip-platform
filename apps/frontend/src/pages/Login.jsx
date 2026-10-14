@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import Card from "../components/ui/Card";
 import Input from "../components/ui/Input";
@@ -11,17 +11,20 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
-    // Mocked latency so the loading state is visible in the demo —
-    // replace with a real POST /auth/login call in v0.3.
-    setTimeout(() => {
-      login(email || "admin@ekip.dev");
-      setSubmitting(false);
+    setError("");
+    try {
+      await login(email, password);
       navigate("/app/search");
-    }, 500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -53,13 +56,17 @@ export default function Login() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
+          {error && <p className="text-xs text-danger">{error}</p>}
           <Button type="submit" disabled={submitting} className="mt-2">
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
         </form>
 
         <p className="mt-5 text-center text-xs text-slate-light">
-          Demo build — any email/password signs you in as a mock user.
+          Don't have an account?{" "}
+          <Link to="/signup" className="text-index hover:underline">
+            Create one
+          </Link>
         </p>
       </Card>
     </div>
