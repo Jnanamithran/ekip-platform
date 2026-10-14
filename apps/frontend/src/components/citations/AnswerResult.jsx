@@ -1,7 +1,7 @@
 import Card from "../ui/Card";
 import CitationTab from "./CitationTab";
 
-export default function AnswerResult({ result }) {
+export default function AnswerResult({ result, onPreview }) {
   const { answer, sources = [] } = result;
 
   return (
@@ -22,7 +22,12 @@ export default function AnswerResult({ result }) {
             Sources
           </span>
           {sources.map((source, i) => (
-            <CitationTab key={source.id} source={source} index={i + 1} />
+            <CitationTab
+              key={source.id}
+              source={source}
+              index={i + 1}
+              onPreview={onPreview}
+            />
           ))}
         </div>
       )}

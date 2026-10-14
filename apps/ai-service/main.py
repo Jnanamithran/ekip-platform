@@ -45,6 +45,7 @@ class AskRequest(BaseModel):
 
 class CitationOut(BaseModel):
     id: str
+    document_id: str
     filename: str
     page: int
     excerpt: str
@@ -114,11 +115,11 @@ async def ask(req: AskRequest):
 
     # --- Step 6: hybrid retrieval (dense + sparse + RRF fusion) ---
     await update_search('Searching your authorized documents')
-    chunks = hybrid_retrieve(query=req.query, rbac=rbac, top_k=20)
+    chunks = hybrid_retrieve(query=req.query, rbac=rbac, top_k=12)
 
     # --- Step 7: cross-encoder rerank ---
     await update_search(f'Ranking {len(chunks)} relevant passages')
-    reranked = rerank(query=req.query, chunks=chunks, top_n=5)
+    reranked = rerank(query=req.query, chunks=chunks, top_n=4)
 
     # --- Step 8: Ollama LLM generation ---
     await update_search('Drafting an answer from the selected passages')
@@ -135,6 +136,7 @@ async def ask(req: AskRequest):
     sources = [
         {
             'id': c.chunk_id,
+            'document_id': c.document_id,
             'filename': c.filename,
             'page': c.page_num,
             'excerpt': c.chunk_text,

@@ -25,6 +25,9 @@ services:
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in the project root .env file}
       - QDRANT_URL=http://qdrant:6333
       - FRONTEND_ORIGINS=http://localhost:5173
+      - UPLOAD_STORAGE_DIR=/app/uploads
+    volumes:
+      - document_uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,6 +104,7 @@ volumes:
   qdrant_data:
   postgres_data:
   ollama_data:
+  document_uploads:
 
 networks:
   ekip-net:

@@ -58,6 +58,7 @@ model Document {
   stage         String     @default("Complete")
   progress      Int        @default(100)
   chunk_count   Int        @default(0)
+  storage_key   String?
   uploaded_by   String
   allowed_roles Role[]
   created_at    DateTime   @default(now())
@@ -72,6 +73,20 @@ model AiRequestProgress {
   created_at DateTime @default(now())
 
   @@index([created_at])
+}
+
+model AiAnswerHistory {
+  id         String   @id @default(uuid())
+  request_id String   @unique
+  user_id    String
+  question   String
+  answer     String
+  sources    Json
+  model      String
+  has_answer Boolean
+  created_at DateTime @default(now())
+
+  @@index([user_id, created_at])
 }
 
 model RefreshToken {

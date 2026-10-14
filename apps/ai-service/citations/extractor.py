@@ -88,7 +88,10 @@ class CitedAnswer:
 
 # Matches [SOURCE 1], [SOURCE 2], [SOURCE 1, SOURCE 2], [SOURCE 1, 2] etc.
 # Handles all common formats the LLM might produce despite prompt instructions.
-_SOURCE_PATTERN = re.compile(r'\[SOURCE\s+(\d+(?:[,\-]\s*(?:SOURCE\s+)?\d+)*)\]', re.IGNORECASE)
+_SOURCE_PATTERN = re.compile(
+    r'\[SOURCE\s+(\d+(?:[,\-]\s*(?:SOURCE\s+)?\d+)*)(?:\s*\|[^\]]*)?\]',
+    re.IGNORECASE,
+)
 
 # Detect "no answer" responses — model said it couldn't find the answer
 _NO_ANSWER_PHRASES = [
