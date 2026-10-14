@@ -8,6 +8,7 @@ services:
     environment:
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_URL=http://ollama:11434
+      - BACKEND_URL=http://backend:5000
     depends_on:
       - qdrant
       - ollama
@@ -22,7 +23,8 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ekip
       - AI_SERVICE_URL=http://ai-service:8000
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in the project root .env file}
-      - FRONTEND_ORIGINS=http://localhost:5173,http://localhost:${FRONTEND_PORT:-5175}
+      - QDRANT_URL=http://qdrant:6333
+      - FRONTEND_ORIGINS=http://localhost:5173
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,7 +48,7 @@ services:
   frontend:
     build: ./apps/frontend
     ports:
-      - "${FRONTEND_PORT:-5175}:5173"
+      - "5173:5173"
     environment:
       - VITE_API_URL=http://localhost:5000
     depends_on:

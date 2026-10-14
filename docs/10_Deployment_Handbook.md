@@ -47,15 +47,10 @@ Use `docker ps` to confirm all containers show `Up`, and `docker-compose logs <s
 
 **Recommendation:** Add an `.editorconfig` at the repo root specifying `charset = utf-8` (without BOM) to prevent this recurring across the team.
 
-### 2. Frontend unreachable despite container running
-**Symptom:** Browser shows "site can't be reached" for `http://localhost:3000/`, even though `docker ps` shows the frontend container `Up`.
-
-**Cause:** `docker-compose.yml` maps port `3000:3000`, but Vite's default dev server port is `5173`. The container was listening on 5173 internally, which was never exposed to the host.
-
-**Fix:** Updated `apps/frontend/package.json` dev script to force Vite onto port 3000:
-```json
-"dev": "vite --host --port 3000"
-```
+### 2. Frontend port
+The frontend is available on port 5173 both locally and through Docker Compose.
+Compose maps host port 5173 to container port 5173, matching Vite's configured
+port. Ensure host port 5173 is available if the frontend cannot start.
 
 ### 3. Frontend shows 404 at localhost:5173
 **Status:** Expected, not a bug. `apps/frontend/src/{components,pages,hooks,store,utils}` currently contain only `.gitkeep` placeholders — no actual React app or `index.html` has been built yet. The 404 confirms the dev server itself is healthy and correctly reports "no page to serve." This will resolve naturally once frontend development begins.

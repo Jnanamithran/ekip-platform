@@ -28,7 +28,7 @@ the EKIP knowledge base.
 ```text
 Browser
   │
-  ├── React + Vite frontend ─────────────── http://localhost:5175
+  ├── React + Vite frontend ─────────────── http://localhost:5173
   │       │
   │       └── Express backend API ───────── http://localhost:5000
   │                ├── PostgreSQL ───────── users, organizations, roles
@@ -43,16 +43,30 @@ uses that context to filter document chunks before retrieval.
 
 | Service | Purpose | Host address / port | Started by default? |
 | --- | --- | --- | --- |
-| Frontend | React application served by Vite | `http://localhost:5175` | Yes |
+| Frontend | React application served by Vite | `http://localhost:5173` | Yes |
 | Backend | Express API, authentication, authorization, AI proxy | `http://localhost:5000` | Yes |
 | PostgreSQL | Application relational database | `localhost:5432` | Yes |
 | AI service | Ingestion, retrieval, reranking, answer generation | `http://localhost:8000` | With the `ai` profile |
 | Qdrant | Vector storage and similarity search | `localhost:6333` | With the `ai` profile |
 | Ollama | Local LLM runtime | `localhost:11434` | With the `ai` profile |
 
-The Docker Compose frontend port defaults to **5175 on your computer** and
-**5173 inside its container**. Port 5173 is also the default when you run Vite
-directly on your computer.
+The frontend uses port **5173** both on your computer and inside its container.
+The backend allows browser requests only from `http://localhost:5173`.
+
+Uploaded files are parsed from a temporary file; the original file is not
+retained. Extracted chunks and vectors are stored in Qdrant, while upload
+metadata and processing status are stored in PostgreSQL and shown on the
+Upload documents page. Processing progress identifies the current stage:
+parsing pages, creating searchable chunks, generating embeddings, and writing
+those chunks to Qdrant. Previously indexed uploads are also listed from Qdrant;
+their original upload time and processing stages are not available.
+Use the delete control beside a document to remove its indexed chunks and
+upload-history record.
+
+Search shows the active retrieval, ranking, answer-drafting, and citation
+stages. Answers include a brief summary of how many cited passages and
+documents support them, with the source excerpts available for review. Private
+internal model reasoning is not displayed.
 
 ## Requirements
 
@@ -132,9 +146,8 @@ if (-not $hasSecret) {
 }
 ```
 
-Keep `.env` private; it is ignored by Git. The Compose frontend port defaults
-to 5175. To use a different available host port, add a line such as
-`FRONTEND_PORT=5176` to the root `.env`.
+Keep `.env` private; it is ignored by Git. The frontend is available at
+`http://localhost:5173`.
 
 ### 4. Build and start every service
 
@@ -171,8 +184,8 @@ named volume and do not require downloading the model again.
 
 ### 6. Open the application and check service health
 
-- Sign up: <http://localhost:5175/signup>
-- Sign in: <http://localhost:5175/login>
+- Sign up: <http://localhost:5173/signup>
+- Sign in: <http://localhost:5173/login>
 - Backend health: <http://localhost:5000/health>
 - AI service health: <http://localhost:8000/health>
 - Qdrant dashboard: <http://localhost:6333/dashboard>
@@ -241,8 +254,8 @@ Create `apps/backend/.env` with local connection settings:
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ekip?schema=public
 JWT_SECRET=replace-with-a-private-random-secret
 PORT=5000
-FRONTEND_ORIGINS=http://localhost:5173,http://localhost:5175
 AI_SERVICE_URL=http://localhost:8000
+QDRANT_URL=http://localhost:6333
 ```
 
 Use a private random value for `JWT_SECRET`. The local backend loads this file
@@ -290,9 +303,10 @@ npm ci
 npm run dev
 ```
 
-Open the URL Vite prints, usually <http://localhost:5173>. The checked-in
-`apps/frontend/.env` points the frontend at the local API on port 5000. If that
-file is missing, copy `.env.example` to `.env` in `apps/frontend`.
+Open the URL Vite prints, usually <http://localhost:5173>. Set
+`VITE_API_URL=http://127.0.0.1:5000` in `apps/frontend/.env` so the browser
+reaches the backend consistently on Windows. If that file is missing, copy
+`.env.example` to `.env` in `apps/frontend`.
 
 ### Local versus Docker URLs
 
@@ -303,8 +317,10 @@ Inside the Compose network, services reach one another by service name:
 - AI service to Qdrant: `qdrant:6333`
 - AI service to Ollama: `ollama:11434`
 
-Processes running directly on Windows must use `localhost` and the published
-host ports instead.
+Processes running directly on Windows use the published host ports. For the
+frontend's browser API URL, use `http://127.0.0.1:5000`; this avoids Windows
+resolving `localhost` to an address that does not reach the published Docker
+port.
 
 ## AI and web access
 
@@ -332,13 +348,6 @@ The AI ingestion code supports:
 
 PPTX and CSV are not currently supported. Search answers only from indexed,
 authorized content.
-
-**Known ingestion limitation:** the AI endpoint receives an uploaded file but
-currently passes the client-provided filename to a parser that expects a
-filesystem path. The file bytes are not first written to that path. As a
-result, the upload-to-index flow may fail until the AI endpoint saves the
-uploaded content before parsing it. The upload screen is connected to the
-endpoint, but do not treat successful indexing as verified yet.
 
 The Admin API supports user, workspace, and department operations. The
 frontend's administration screens currently focus on displaying available
@@ -433,10 +442,12 @@ docker compose exec ollama ollama list
 If needed, download it with `docker compose exec ollama ollama pull
 llama3.2:3b`.
 
-### Frontend opens on a different port
+### Frontend is unavailable on port 5173
 
-Docker uses host port 5175 by default. If you set `FRONTEND_PORT` in the root
-`.env`, open that port instead. Local Vite normally uses port 5173.
+Docker Compose publishes the Vite frontend on port 5173. Confirm the frontend
+container is running with `docker compose ps` and that host port 5173 is not
+already in use. The backend accepts browser requests only from
+`http://localhost:5173`.
 
 ### Reset all data
 
