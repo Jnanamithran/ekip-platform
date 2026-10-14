@@ -141,4 +141,64 @@ async function listWorkspaces(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
-module.exports = { createUser, listUsers, createWorkspace, listWorkspaces };
+// POST /admin/departments  (Admin only)
+async function createDepartment(req, res) {
+  try {
+    const { workspace_id, name } = req.body || {};
+
+    if (typeof workspace_id !== 'string' || !workspace_id ||
+        typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'workspace_id and name are required' });
+    }
+
+    // The workspace must belong to the admin's OWN organization.
+    // Same answer for "doesn't exist" and "not yours".
+    const workspace = await prisma.workspace.findFirst({
+      where: { id: workspace_id, org_id: req.user.org_id },
+    });
+    if (!workspace) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+
+    const department = await prisma.department.create({
+      data: { name: name.trim(), workspace_id },
+      select: { id: true, name: true, workspace_id: true },
+    });
+
+    res.status(201).json({ department });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+// GET /admin/departments  (Admin only)
+// Optional filter: ?workspace_id=...
+async function listDepartments(req, res) {
+  try {
+    const { workspace_id } = req.query;
+
+    // The org filter comes from the token. workspace_id only narrows the result.
+    const departments = await prisma.department.findMany({
+      where: {
+        workspace: { org_id: req.user.org_id },
+        ...(workspace_id && { workspace_id }),
+      },
+      select: { id: true, name: true, workspace_id: true },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ departments });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+module.exports = {
+  createUser,
+  listUsers,
+  createWorkspace,
+  listWorkspaces,
+  createDepartment,
+  listDepartments,
+};

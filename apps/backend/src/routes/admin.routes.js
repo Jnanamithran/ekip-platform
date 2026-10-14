@@ -5,6 +5,8 @@ const {
   listUsers,
   createWorkspace,
   listWorkspaces,
+  createDepartment,
+  listDepartments,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -18,4 +20,8 @@ router.get('/users', listUsers);
 router.post('/workspaces', createWorkspace);
 router.get('/workspaces', listWorkspaces);
 
+router.post('/departments', createDepartment);
+router.get('/departments', listDepartments);
+
 module.exports = router;
+    
