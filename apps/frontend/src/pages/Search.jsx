@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { askEkip } from "../mocks/queryResults";
+import { askQuestion } from "../lib/apiClient";
 import AnswerResult from "../components/citations/AnswerResult";
 import Button from "../components/ui/Button";
 
@@ -19,9 +19,14 @@ export default function Search() {
     if (!trimmed || loading) return;
     setLoading(true);
     setQuery("");
-    const result = await askEkip(trimmed);
-    setHistory((h) => [...h, { query: trimmed, result }]);
-    setLoading(false);
+    try {
+      const result = await askQuestion(trimmed);
+      setHistory((h) => [...h, { query: trimmed, result }]);
+    } catch (err) {
+      setHistory((h) => [...h, { query: trimmed, result: { error: err.message } }]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -43,13 +48,11 @@ export default function Search() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Ask about a policy, process, or document…"
-          className="flex-1 rounded-md border border-hairline bg-paper-raised px-3
-            py-2 text-sm text-ink placeholder:text-slate-light
-            focus:border-index focus:outline-none"
+          placeholder="Ask about a policy, process, or document\u2026"
+          className="flex-1 rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink placeholder:text-slate-light focus:border-index focus:outline-none"
         />
         <Button type="submit" disabled={loading}>
-          {loading ? "Searching…" : "Ask"}
+          {loading ? "Searching\u2026" : "Ask"}
         </Button>
       </form>
 
@@ -63,8 +66,7 @@ export default function Search() {
               <button
                 key={s}
                 onClick={() => runQuery(s)}
-                className="rounded-full border border-hairline bg-paper-raised px-3
-                  py-1.5 text-xs text-slate hover:border-index hover:text-index"
+                className="rounded-full border border-hairline bg-paper-raised px-3 py-1.5 text-xs text-slate hover:border-index hover:text-index"
               >
                 {s}
               </button>
@@ -77,7 +79,11 @@ export default function Search() {
         {history.map((entry, i) => (
           <div key={i} className="flex flex-col gap-2">
             <p className="text-sm font-medium text-ink-soft">{entry.query}</p>
-            <AnswerResult result={entry.result} />
+            {entry.result?.error ? (
+              <p className="text-sm text-danger">{entry.result.error}</p>
+            ) : (
+              <AnswerResult result={entry.result} />
+            )}
           </div>
         ))}
 
@@ -86,7 +92,7 @@ export default function Search() {
             <span className="h-2 w-2 animate-pulse rounded-full bg-index" />
             <span className="h-2 w-2 animate-pulse rounded-full bg-index [animation-delay:150ms]" />
             <span className="h-2 w-2 animate-pulse rounded-full bg-index [animation-delay:300ms]" />
-            <span className="ml-1">Searching connected documents…</span>
+            <span className="ml-1">Searching connected documents\u2026</span>
           </div>
         )}
       </div>
