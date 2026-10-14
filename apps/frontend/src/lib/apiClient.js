@@ -76,7 +76,7 @@ export async function apiFetch(path, options = {}) {
         fetch(API_URL + path, {
             ...options,
             headers: {
-                'Content-Type': 'application/json',
+                ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
                 ...(token ? { Authorization: 'Bearer ' + token } : {}),
                 ...options.headers,
             },
@@ -165,25 +165,10 @@ export async function registerOrganization(payload) {
  * Response: { answer, sources: [{ id, filename, page, excerpt }], model, has_answer }
  */
 export async function askQuestion(query) {
-    const res = await fetch(API_URL + '/ai/ask', {
+    return apiFetch('/ai/ask', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer ' + accessToken,
-        },
-        body: JSON.stringify({
-            query,
-            token: getRefreshToken(),
-        }),
+        body: JSON.stringify({ query }),
     });
-
-    const data = await parseJsonSafe(res);
-    if (!res.ok) {
-        const error = new Error(data?.error ?? 'AI request failed (' + res.status + ')');
-        error.data = data;
-        throw error;
-    }
-    return data;
 }
 
 /**
@@ -197,18 +182,8 @@ export async function askQuestion(query) {
 export async function uploadDocument(file) {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('token', getRefreshToken() || '');
-
-    const res = await fetch(API_URL + '/ai/ingest', {
+    return apiFetch('/ai/ingest', {
         method: 'POST',
         body: formData,
     });
-
-    const data = await parseJsonSafe(res);
-    if (!res.ok) {
-        const error = new Error(data?.error ?? 'Upload failed (' + res.status + ')');
-        error.data = data;
-        throw error;
-    }
-    return data;
 }

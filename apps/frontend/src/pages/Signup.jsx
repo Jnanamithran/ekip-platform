@@ -50,7 +50,7 @@ export default function Signup() {
                     <Input
                         id="orgName"
                         label="Organization name"
-                        placeholder="Acme Corp"
+                        placeholder="Your organization"
                         value={orgName}
                         onChange={(e) => setOrgName(e.target.value)}
                         required
