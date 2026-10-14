@@ -23,6 +23,7 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
             citations=[
                 SimpleNamespace(
                     chunk_id='chunk-1',
+                    document_id='doc-1',
                     filename='guide.pdf',
                     page_num=2,
                     chunk_text='Follow the approved process.',
@@ -51,6 +52,7 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
     assert response.status_code == 200
     assert response.json()['sources'] == [{
         'id': 'chunk-1',
+        'document_id': 'doc-1',
         'filename': 'guide.pdf',
         'page': 2,
         'excerpt': 'Follow the approved process.',

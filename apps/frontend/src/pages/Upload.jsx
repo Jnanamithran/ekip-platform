@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { deleteDocument, getDocuments, uploadDocument } from "../lib/apiClient";
+import PdfPreview from "../components/documents/PdfPreview";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
@@ -11,6 +12,7 @@ export default function Upload() {
   const [loadError, setLoadError] = useState("");
   const [deletingIds, setDeletingIds] = useState([]);
   const [deleteError, setDeleteError] = useState("");
+  const [preview, setPreview] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -22,6 +24,8 @@ export default function Upload() {
           setUploads(result.documents.map((document) => ({
             id: document.id,
             filename: document.filename,
+            fileType: document.file_type,
+            previewAvailable: document.preview_available,
             processing: document.status === "Processing",
             status: document.status === "Processing"
               ? document.stage || "Processing..."
@@ -97,6 +101,9 @@ export default function Upload() {
               ? {
                 ...upload,
                 filename: result.filename,
+                id: result.document_id || upload.id,
+                fileType: file.name.split(".").pop()?.toLowerCase(),
+                previewAvailable: result.preview_available,
                 processing: false,
                 status: result.status === "Indexed"
                   ? `Indexed (${result.chunk_count} chunks)`
@@ -180,6 +187,19 @@ export default function Upload() {
                   {upload.filename}
                 </span>
                 <div className="flex shrink-0 items-center gap-3">
+                  {upload.fileType === "pdf" && upload.previewAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => setPreview({
+                        documentId: upload.id,
+                        filename: upload.filename,
+                        page: 1,
+                      })}
+                      className="text-xs font-medium text-index underline underline-offset-2"
+                    >
+                      Preview
+                    </button>
+                  )}
                   <span className="text-xs text-slate">{upload.status}</span>
                   {upload.processing && Number.isInteger(upload.progress) && (
                     <span className="text-xs text-slate">{upload.progress}%</span>
@@ -219,6 +239,14 @@ export default function Upload() {
       )}
       {uploads.length === 0 && !loadError && (
         <p className="text-sm text-slate">No documents have been uploaded to this department yet.</p>
+      )}
+      {preview && (
+        <PdfPreview
+          documentId={preview.documentId}
+          filename={preview.filename}
+          page={preview.page}
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   );

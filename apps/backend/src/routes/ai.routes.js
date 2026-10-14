@@ -19,10 +19,12 @@ router.use(authenticate, (req, res, next) => {
 router.post('/ask', aiController.ask);
 router.post('/ask/progress', aiController.updateAskProgress);
 router.get('/ask/progress/:requestId', aiController.getAskProgress);
+router.get('/history', aiController.listAnswerHistory);
 
 // Upload and process a document (ingestion pipeline)
 router.post('/ingest', upload.single('file'), aiController.ingest);
 router.post('/documents/:id/progress', aiController.updateDocumentProgress);
+router.get('/documents/:id/preview', aiController.previewDocument);
 
 // List documents available to the authenticated user
 router.get('/documents', aiController.listDocuments);

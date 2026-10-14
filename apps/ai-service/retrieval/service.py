@@ -16,6 +16,7 @@ The reranker (Step 7) will wrap hybrid_retrieve — it calls this
 function first, then re-scores the fused top-k with a cross-encoder.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 from .schema import RBACContext, RetrievedChunk
@@ -127,7 +128,10 @@ def hybrid_retrieve(
     # BM25 re-enforces RBAC by only scoring against fetch_authorized_chunks output.
     # Both paths are independently correct — RRF just merges their rankings.
 
-    dense_results  = _dense_search(query, rbac, top_k=rrf_candidate_k)
-    sparse_results = sparse_retrieve(query, rbac, top_k=rrf_candidate_k)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        dense_future = executor.submit(_dense_search, query, rbac, rrf_candidate_k)
+        sparse_future = executor.submit(sparse_retrieve, query, rbac, rrf_candidate_k)
+        dense_results = dense_future.result()
+        sparse_results = sparse_future.result()
 
     return reciprocal_rank_fusion(dense_results, sparse_results, top_k=top_k)

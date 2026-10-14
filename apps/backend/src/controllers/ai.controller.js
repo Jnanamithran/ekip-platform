@@ -1,5 +1,6 @@
 const axios = require('axios');
 const FORM_DATA = require('form-data');
+const fs = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { PrismaClient } = require('@prisma/client');
@@ -7,7 +8,21 @@ const { PrismaClient } = require('@prisma/client');
 // AI service base URL (set via env in Docker; default to localhost for dev)
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 const QDRANT_URL = process.env.QDRANT_URL || 'http://localhost:6333';
+const UPLOAD_STORAGE_DIR = path.resolve(
+  process.env.UPLOAD_STORAGE_DIR || path.join(__dirname, '../../uploads')
+);
 const prisma = new PrismaClient();
+
+function storedDocumentPath(storageKey) {
+  if (
+    typeof storageKey !== 'string' ||
+    path.basename(storageKey) !== storageKey ||
+    !/^[0-9a-f-]{36}\.[a-z0-9]+$/i.test(storageKey)
+  ) {
+    throw new Error('Invalid document storage key');
+  }
+  return path.join(UPLOAD_STORAGE_DIR, storageKey);
+}
 
 // Build the RBAC payload extracted from the verified JWT token.
 // The AI service trusts this because it comes from the backend.
@@ -35,6 +50,7 @@ async function health(req, res) {
 // --- Ask a question (full RAG pipeline) ---
 
 async function ask(req, res) {
+  let failureMessage = 'Failed to start search';
   try {
     const rbac = rbacFromReq(req);
     const url = `${AI_SERVICE_URL}/ask`;
@@ -60,6 +76,7 @@ async function ask(req, res) {
       request_id: requestId,
     };
 
+    failureMessage = 'Failed to reach AI service';
     const resp = await axios.post(url, payload, {
       headers: { 'Content-Type': 'application/json' },
     });
@@ -67,28 +84,78 @@ async function ask(req, res) {
     // Transform the AI service's citation shape to match the frontend contract
     const sources = resp.data.sources.map((s) => ({
       id: s.id,
+      document_id: s.document_id,
       filename: s.filename,
       page: s.page,
       excerpt: s.excerpt,
     }));
     const sourceDocumentCount = new Set(sources.map((source) => source.filename)).size;
+    const answerSummary = sources.length
+      ? `This answer is based on ${sources.length} cited passage${sources.length === 1 ? '' : 's'} from ${sourceDocumentCount} document${sourceDocumentCount === 1 ? '' : 's'}.`
+      : 'No supporting passages were found in the documents available to you.';
+    failureMessage = 'Answer was generated but could not be saved to history';
+    const historyEntry = await prisma.aiAnswerHistory.create({
+      data: {
+        request_id: requestId,
+        user_id: req.user.user_id,
+        question: req.body.query,
+        answer: resp.data.answer,
+        sources,
+        model: resp.data.model,
+        has_answer: resp.data.has_answer,
+      },
+      select: { id: true, created_at: true },
+    });
 
     res.json({
+      history_id: historyEntry.id,
+      created_at: historyEntry.created_at,
       answer: resp.data.answer,
       sources,
       model: resp.data.model,
       has_answer: resp.data.has_answer,
-      answer_summary: sources.length
-        ? `This answer is based on ${sources.length} cited passage${sources.length === 1 ? '' : 's'} from ${sourceDocumentCount} document${sourceDocumentCount === 1 ? '' : 's'}.`
-        : 'No supporting passages were found in the documents available to you.',
+      answer_summary: answerSummary,
     });
   } catch (err) {
     console.error('[ai] /ask failed:', err.message);
     if (err.response) {
       res.status(err.response.status).json({ error: err.response.data });
     } else {
-      res.status(500).json({ error: 'Failed to reach AI service' });
+      res.status(500).json({ error: failureMessage });
     }
+  }
+}
+
+async function listAnswerHistory(req, res) {
+  try {
+    const entries = await prisma.aiAnswerHistory.findMany({
+      where: { user_id: req.user.user_id },
+      orderBy: { created_at: 'desc' },
+      take: 100,
+    });
+    res.json({
+      entries: entries.reverse().map((entry) => {
+        const sources = Array.isArray(entry.sources) ? entry.sources : [];
+        const documentCount = new Set(sources.map((source) => source.filename)).size;
+        return {
+          id: entry.id,
+          query: entry.question,
+          created_at: entry.created_at,
+          result: {
+            answer: entry.answer,
+            sources,
+            model: entry.model,
+            has_answer: entry.has_answer,
+            answer_summary: sources.length
+              ? `This answer is based on ${sources.length} cited passage${sources.length === 1 ? '' : 's'} from ${documentCount} document${documentCount === 1 ? '' : 's'}.`
+              : 'No supporting passages were found in the documents available to you.',
+          },
+        };
+      }),
+    });
+  } catch (err) {
+    console.error('[ai] answer history lookup failed:', err.message);
+    res.status(500).json({ error: 'Failed to load question history' });
   }
 }
 
@@ -140,8 +207,13 @@ async function ingest(req, res) {
   let documentCreated = false;
 
   try {
-    const filename = path.basename(req.file.originalname);
-    const fileType = path.extname(filename).slice(1).toLowerCase();
+    const filename = path.basename(String(req.file.originalname).replace(/\\/g, '/'));
+    const extension = path.extname(filename).toLowerCase();
+    const fileType = extension.slice(1);
+    if (!['.pdf', '.docx', '.xlsx', '.txt'].includes(extension)) {
+      return res.status(400).json({ error: 'Supported file types are PDF, DOCX, XLSX, and TXT' });
+    }
+    const storageKey = `${documentId}${extension}`;
     await prisma.document.create({
       data: {
         id: documentId,
@@ -156,6 +228,13 @@ async function ingest(req, res) {
       },
     });
     documentCreated = true;
+
+    await fs.mkdir(UPLOAD_STORAGE_DIR, { recursive: true });
+    await fs.writeFile(storedDocumentPath(storageKey), req.file.buffer, { flag: 'wx' });
+    await prisma.document.update({
+      where: { id: documentId },
+      data: { storage_key: storageKey },
+    });
 
     // Build FormData for multipart upload
     const form = new FORM_DATA();
@@ -184,7 +263,11 @@ async function ingest(req, res) {
       },
     });
 
-    res.json({ ...resp.data, document_id: document.id });
+    res.json({
+      ...resp.data,
+      document_id: document.id,
+      preview_available: fileType === 'pdf',
+    });
   } catch (err) {
     console.error('[ai] /ingest failed:', err.message);
     if (documentCreated) {
@@ -227,6 +310,7 @@ async function listDocuments(req, res) {
         stage: true,
         progress: true,
         chunk_count: true,
+        storage_key: true,
         created_at: true,
       },
       orderBy: { created_at: 'desc' },
@@ -281,17 +365,76 @@ async function listDocuments(req, res) {
       const legacyDocuments = [...indexedDocuments.values()].filter(
         (document) => !savedIds.has(document.id)
       );
-      res.json({ documents: [...savedDocuments, ...legacyDocuments] });
+      res.json({
+        documents: [
+          ...savedDocuments.map(({ storage_key: storageKey, ...document }) => ({
+            ...document,
+            preview_available: Boolean(storageKey && document.file_type === 'pdf'),
+          })),
+          ...legacyDocuments.map((document) => ({ ...document, preview_available: false })),
+        ],
+      });
     } catch (err) {
       console.error('[ai] indexed document history unavailable:', err.message);
       res.json({
-        documents: savedDocuments,
+        documents: savedDocuments.map(({ storage_key: storageKey, ...document }) => ({
+          ...document,
+          preview_available: Boolean(storageKey && document.file_type === 'pdf'),
+        })),
         warning: 'Previously indexed documents could not be loaded from the AI index',
       });
     }
   } catch (err) {
     console.error('[ai] /documents failed:', err.message);
     res.status(500).json({ error: 'Failed to load documents' });
+  }
+}
+
+async function previewDocument(req, res) {
+  try {
+    const document = await prisma.document.findFirst({
+      where: {
+        id: req.params.id,
+        department_id: req.user.department_id,
+        allowed_roles: { has: req.user.role },
+        file_type: 'pdf',
+        storage_key: { not: null },
+      },
+      select: { filename: true, storage_key: true },
+    });
+    if (!document) {
+      return res.status(404).json({
+        error: 'PDF preview is unavailable. Re-upload this document to enable preview.',
+      });
+    }
+
+    const filePath = storedDocumentPath(document.storage_key);
+    await fs.access(filePath);
+    const safeFilename = document.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${safeFilename}"`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error('[ai] PDF preview transfer failed:', err.message);
+        if (!res.headersSent) {
+          res.status(err.statusCode === 404 ? 404 : 500).json({
+            error: 'Failed to load PDF preview',
+          });
+        }
+      }
+    });
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return res.status(404).json({
+        error: 'PDF preview is unavailable. Re-upload this document to enable preview.',
+      });
+    }
+    console.error('[ai] PDF preview failed:', err.message);
+    res.status(500).json({ error: 'Failed to load PDF preview' });
   }
 }
 
@@ -343,6 +486,13 @@ async function deleteDocument(req, res) {
     }
 
     if (document) {
+      if (document.storage_key) {
+        try {
+          await fs.unlink(storedDocumentPath(document.storage_key));
+        } catch (fileError) {
+          if (fileError.code !== 'ENOENT') throw fileError;
+        }
+      }
       await prisma.document.delete({ where: { id: document.id } });
     }
 
@@ -394,8 +544,10 @@ module.exports = {
   ask,
   updateAskProgress,
   getAskProgress,
+  listAnswerHistory,
   ingest,
   listDocuments,
+  previewDocument,
   updateDocumentProgress,
   deleteDocument,
 };

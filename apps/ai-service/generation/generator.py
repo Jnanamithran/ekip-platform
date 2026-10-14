@@ -47,8 +47,8 @@ DEFAULT_MODEL       = "llama3.2:3b"
 OLLAMA_URL          = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_CLIENT       = ollama.Client(host=OLLAMA_URL)
 TEMPERATURE         = 0.1     # near-deterministic — factual Q&A, not creative
-MAX_CONTEXT_CHUNKS  = 5       # how many chunks to include in the prompt
-MAX_TOKENS          = 512     # answer length ceiling
+MAX_CONTEXT_CHUNKS  = 4       # keep the prompt focused for faster generation
+MAX_TOKENS          = 256     # concise answers reduce generation time
 
 
 # ── Output schema ─────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ def _build_prompt(query: str, chunks: List[RetrievedChunk]) -> str:
 Rules you must follow:
 - Answer using ONLY the context provided. Do not use outside knowledge.
 - If the context does not contain enough information to answer, say: "I could not find a clear answer in the available documents."
-- Keep your answer concise and factual — 3 to 6 sentences maximum.
+- Keep your answer concise and factual — 3 sentences maximum.
 - When you use information from a source, reference it as [SOURCE N] inline in your answer.
 - Do not make up facts, figures, or details not present in the context.
 
