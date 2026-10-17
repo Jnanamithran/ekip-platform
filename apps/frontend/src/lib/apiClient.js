@@ -179,6 +179,10 @@ export async function getAnswerHistory() {
     return apiFetch('/ai/history');
 }
 
+export async function clearAnswerHistory() {
+    return apiFetch('/ai/history', { method: 'DELETE' });
+}
+
 export async function getPdfPreview(documentId) {
     const path = '/ai/documents/' + encodeURIComponent(documentId) + '/preview';
     const request = (token) => fetch(API_URL + path, {

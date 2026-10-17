@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { askQuestion, getAnswerHistory, getAskProgress } from "../lib/apiClient";
+import { askQuestion, clearAnswerHistory, getAnswerHistory, getAskProgress } from "../lib/apiClient";
 import AnswerResult from "../components/citations/AnswerResult";
 import PdfPreview from "../components/documents/PdfPreview";
 import Button from "../components/ui/Button";
@@ -9,6 +9,7 @@ export default function Search() {
   const [history, setHistory] = useState([]); // [{ query, result }]
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState("");
+  const [clearing, setClearing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState("");
   const [processingStage, setProcessingStage] = useState("");
@@ -78,13 +79,47 @@ export default function Search() {
     }
   }
 
+  async function clearChat() {
+    if (clearing || loading) return;
+    if (
+      !window.confirm(
+        "Clear your saved question history? Every asked question and its answer will be removed and cannot be undone."
+      )
+    ) {
+      return;
+    }
+    setClearing(true);
+    setHistoryError("");
+    try {
+      await clearAnswerHistory();
+      setHistory([]);
+      setPreview(null);
+    } catch (err) {
+      setHistoryError(err.message);
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 pb-32">
-      <div>
-        <h1 className="font-display text-xl text-ink">Search</h1>
-        <p className="text-sm text-slate">
-          Ask a question across every connected document in your workspace.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-xl text-ink">Search</h1>
+          <p className="text-sm text-slate">
+            Ask a question across every connected document in your workspace.
+          </p>
+        </div>
+        {history.length > 0 && !historyLoading ? (
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={clearing || loading}
+            onClick={clearChat}
+          >
+            {clearing ? "Clearing\u2026" : "Clear chat"}
+          </Button>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-4">

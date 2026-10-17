@@ -159,6 +159,19 @@ async function listAnswerHistory(req, res) {
   }
 }
 
+// Remove every saved question/answer pair for the authenticated user.
+async function clearAnswerHistory(req, res) {
+  try {
+    const result = await prisma.aiAnswerHistory.deleteMany({
+      where: { user_id: req.user.user_id },
+    });
+    res.json({ deleted: result.count });
+  } catch (err) {
+    console.error('[ai] answer history clear failed:', err.message);
+    res.status(500).json({ error: 'Failed to clear question history' });
+  }
+}
+
 async function updateAskProgress(req, res) {
   const { request_id: requestId, stage } = req.body;
   if (typeof requestId !== 'string' || typeof stage !== 'string' || stage.length > 120) {
@@ -545,6 +558,7 @@ module.exports = {
   updateAskProgress,
   getAskProgress,
   listAnswerHistory,
+  clearAnswerHistory,
   ingest,
   listDocuments,
   previewDocument,
