@@ -20,6 +20,7 @@ router.post('/ask', aiController.ask);
 router.post('/ask/progress', aiController.updateAskProgress);
 router.get('/ask/progress/:requestId', aiController.getAskProgress);
 router.get('/history', aiController.listAnswerHistory);
+router.delete('/history', aiController.clearAnswerHistory);
 
 // Upload and process a document (ingestion pipeline)
 router.post('/ingest', upload.single('file'), aiController.ingest);

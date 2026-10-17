@@ -4,16 +4,6 @@ import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import { RoleBadge } from "../components/ui/Badge";
 
-const DEMO_USAGE = [
-  { day: "Mon", questions: 12 },
-  { day: "Tue", questions: 19 },
-  { day: "Wed", questions: 15 },
-  { day: "Thu", questions: 27 },
-  { day: "Fri", questions: 22 },
-  { day: "Sat", questions: 8 },
-  { day: "Sun", questions: 11 },
-];
-
 export default function WorkspaceSettings() {
   const [workspaces, setWorkspaces] = useState([]);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -100,8 +90,6 @@ export default function WorkspaceSettings() {
       setSaving(false);
     }
   }
-
-  const maxDemoQuestions = Math.max(...DEMO_USAGE.map((item) => item.questions));
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -199,7 +187,7 @@ export default function WorkspaceSettings() {
             ))}
           </section>
 
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="grid gap-6">
             <Card className="overflow-hidden">
               <div className="border-b border-hairline px-4 py-3">
                 <h2 className="text-sm font-medium text-ink">Departments and members</h2>
@@ -235,38 +223,6 @@ export default function WorkspaceSettings() {
               ) : (
                 <p className="p-4 text-sm text-slate">No departments in this workspace yet.</p>
               )}
-            </Card>
-
-            <Card className="p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-medium text-ink">Weekly questions</h2>
-                  <p className="mt-1 text-xs text-slate">Illustrative sample usage</p>
-                </div>
-                <span className="rounded-full bg-index-soft px-2 py-1 text-[10px] font-medium text-index">
-                  DEMO DATA
-                </span>
-              </div>
-              <div
-                className="mt-6 grid h-36 grid-cols-7 items-end gap-2"
-                role="img"
-                aria-label="Demo chart of sample weekly question counts, not live workspace usage"
-              >
-                {DEMO_USAGE.map((item) => (
-                  <div key={item.day} className="flex h-full flex-col items-center justify-end gap-2">
-                    <span className="text-[10px] text-slate">{item.questions}</span>
-                    <div
-                      className="w-full rounded-t bg-index/80"
-                      style={{ height: `${(item.questions / maxDemoQuestions) * 72}%` }}
-                    />
-                    <span className="text-[10px] text-slate">{item.day}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-4 text-xs leading-relaxed text-slate">
-                Sample values are shown for the dashboard design only. EKIP does not yet collect
-                workspace question-usage analytics.
-              </p>
             </Card>
           </div>
         </>

@@ -30,10 +30,6 @@ department, and Admin account. Admins can view workspace details, rename a
 workspace, inspect its departments and members, and see database-backed member,
 department, and document totals.
 
-The weekly question-usage chart on the workspace dashboard is explicitly
-**demo data**. EKIP does not currently collect workspace question-usage
-analytics; do not treat those sample values as actual activity.
-
 ### Document upload and processing
 
 The Upload Documents page accepts PDF, DOCX, XLSX, and TXT files. The upload
@@ -185,15 +181,14 @@ After signup, upload documents before asking questions about their content.
 2. Sign in using that Admin account.
 3. Upload a supported document and wait until indexing completes.
 4. Ask a question on Search. The current processing stage is displayed while
-   the system works.
+   the system works. Use **Clear chat** to erase your saved question history.
 5. Open a citation’s source to inspect its excerpt, then select **Preview PDF
    at page N** when the original PDF is available.
 6. Open Workspace Settings to review the workspace overview, member list,
    department/document totals, and rename the workspace.
 
 Only Admin users can open Workspace Settings and Manage Users. Workspace
-member, department, and document counts come from PostgreSQL. The usage chart
-is a labelled design/demo sample, not live analytics.
+member, department, and document counts come from PostgreSQL.
 
 ## Run services locally
 
