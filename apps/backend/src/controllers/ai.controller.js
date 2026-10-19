@@ -3,7 +3,7 @@ const FORM_DATA = require('form-data');
 const fs = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, Role } = require('@prisma/client');
 
 // AI service base URL (set via env in Docker; default to localhost for dev)
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
@@ -211,39 +211,47 @@ async function getAskProgress(req, res) {
 
 // --- Ingest a document ---
 
-async function ingest(req, res) {
-  if (!req.file) {
-    return res.status(400).json({ error: 'A document file is required' });
+// Shared by normal uploads and Google Drive imports.
+// Returns { status, body } so each caller decides how to reply.
+async function ingestDocument({ user, token, buffer, filename: rawFilename, mimetype, allowedRoles }) {
+  // One list of roles is saved in Postgres AND sent to the AI service (Qdrant),
+  // so the document list and search can never disagree.
+  if (
+    !Array.isArray(allowedRoles) ||
+    !allowedRoles.length ||
+    !allowedRoles.every((r) => Object.values(Role).includes(r))
+  ) {
+    return { status: 400, body: { error: 'allowed_roles must be a non-empty list of valid roles' } };
   }
 
   const documentId = randomUUID();
   let documentCreated = false;
 
   try {
-    const filename = path.basename(String(req.file.originalname).replace(/\\/g, '/'));
+    const filename = path.basename(String(rawFilename).replace(/\\/g, '/'));
     const extension = path.extname(filename).toLowerCase();
     const fileType = extension.slice(1);
     if (!['.pdf', '.docx', '.xlsx', '.txt'].includes(extension)) {
-      return res.status(400).json({ error: 'Supported file types are PDF, DOCX, XLSX, and TXT' });
+      return { status: 400, body: { error: 'Supported file types are PDF, DOCX, XLSX, and TXT' } };
     }
     const storageKey = `${documentId}${extension}`;
     await prisma.document.create({
       data: {
         id: documentId,
-        department_id: req.user.department_id,
+        department_id: user.department_id,
         filename,
         file_type: fileType,
         status: 'Processing',
         stage: 'File received',
         progress: 5,
-        uploaded_by: req.user.user_id,
-        allowed_roles: [req.user.role],
+        uploaded_by: user.user_id,
+        allowed_roles: allowedRoles,
       },
     });
     documentCreated = true;
 
     await fs.mkdir(UPLOAD_STORAGE_DIR, { recursive: true });
-    await fs.writeFile(storedDocumentPath(storageKey), req.file.buffer, { flag: 'wx' });
+    await fs.writeFile(storedDocumentPath(storageKey), buffer, { flag: 'wx' });
     await prisma.document.update({
       where: { id: documentId },
       data: { storage_key: storageKey },
@@ -251,18 +259,13 @@ async function ingest(req, res) {
 
     // Build FormData for multipart upload
     const form = new FORM_DATA();
-    form.append('rbac', JSON.stringify(rbacFromReq(req)));
-    form.append('token', req.headers['x-ai-token'] || '');
+    form.append('rbac', JSON.stringify({ ...rbacFromReq({ user }), allowed_roles: allowedRoles }));
+    form.append('token', token || '');
     form.append('document_id', documentId);
-    form.append('file', req.file.buffer, {
-      filename,
-      contentType: req.file.mimetype,
-    });
+    form.append('file', buffer, { filename, contentType: mimetype });
 
     const resp = await axios.post(`${AI_SERVICE_URL}/ingest`, form, {
-      headers: {
-        ...form.getHeaders(),
-      },
+      headers: { ...form.getHeaders() },
       timeout: 10 * 60 * 1000,
     });
 
@@ -276,11 +279,10 @@ async function ingest(req, res) {
       },
     });
 
-    res.json({
-      ...resp.data,
-      document_id: document.id,
-      preview_available: fileType === 'pdf',
-    });
+    return {
+      status: 200,
+      body: { ...resp.data, document_id: document.id, preview_available: fileType === 'pdf' },
+    };
   } catch (err) {
     console.error('[ai] /ingest failed:', err.message);
     if (documentCreated) {
@@ -297,17 +299,36 @@ async function ingest(req, res) {
       }
     }
     if (err.response) {
-      res.status(err.response.status).json({
-        error: err.response.data?.detail || 'AI service rejected the document',
-      });
-    } else if (err.code === 'ECONNABORTED') {
-      res.status(504).json({ error: 'Document processing timed out; check its status before retrying' });
-    } else {
-      res.status(500).json({ error: 'Failed to reach AI service' });
+      return {
+        status: err.response.status,
+        body: { error: err.response.data?.detail || 'AI service rejected the document' },
+      };
     }
+    if (err.code === 'ECONNABORTED') {
+      return {
+        status: 504,
+        body: { error: 'Document processing timed out; check its status before retrying' },
+      };
+    }
+    return { status: 500, body: { error: 'Failed to reach AI service' } };
   }
 }
 
+// POST /ai/ingest: a normal upload. Visible only to the uploader's own role, as before.
+async function ingest(req, res) {
+  if (!req.file) {
+    return res.status(400).json({ error: 'A document file is required' });
+  }
+  const { status, body } = await ingestDocument({
+    user: req.user,
+    token: req.headers['x-ai-token'] || '',
+    buffer: req.file.buffer,
+    filename: req.file.originalname,
+    mimetype: req.file.mimetype,
+    allowedRoles: [req.user.role],
+  });
+  res.status(status).json(body);
+}
 async function listDocuments(req, res) {
   try {
     const savedDocuments = await prisma.document.findMany({
@@ -559,7 +580,7 @@ module.exports = {
   getAskProgress,
   listAnswerHistory,
   clearAnswerHistory,
-  ingest,
+  ingest,ingestDocument,
   listDocuments,
   previewDocument,
   updateDocumentProgress,
