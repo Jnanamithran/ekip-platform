@@ -13,7 +13,7 @@ of sync on what "authorized" means.
 """
 
 from typing import List, Dict, Any
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.models import Filter, FieldCondition, MatchAny
 
 from embeddings.qdrant_client import get_client, COLLECTION_NAME
 from .schema import RBACContext
@@ -36,7 +36,7 @@ def fetch_authorized_chunks(rbac: RBACContext) -> List[Dict[str, Any]]:
             FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
             FieldCondition(key="workspace_id", match=MatchValue(value=rbac.workspace_id)),
             FieldCondition(key="department_id", match=MatchValue(value=rbac.department_id)),
-            FieldCondition(key="allowed_roles", match=MatchValue(value=rbac.role)),
+            FieldCondition(key="allowed_roles", match=MatchAny(any=rbac.allowed_roles)),
         ]
     )
 

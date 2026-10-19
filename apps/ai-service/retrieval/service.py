@@ -28,7 +28,7 @@ from .hybrid_search import reciprocal_rank_fusion
 # Retrieval calls into embeddings here; embeddings never calls into retrieval.
 from embeddings.embedder import embed_texts
 from embeddings.qdrant_client import get_client, COLLECTION_NAME
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
 
 # ── internal helper ───────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ def _dense_search(
             FieldCondition(key="org_id",        match=MatchValue(value=rbac.org_id)),
             FieldCondition(key="workspace_id",  match=MatchValue(value=rbac.workspace_id)),
             FieldCondition(key="department_id", match=MatchValue(value=rbac.department_id)),
-            FieldCondition(key="allowed_roles", match=MatchValue(value=rbac.role)),
+            FieldCondition(key="allowed_roles", match=MatchAny(any=rbac.allowed_roles)),
         ]
     )
 

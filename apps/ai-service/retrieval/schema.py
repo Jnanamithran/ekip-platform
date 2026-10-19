@@ -13,11 +13,17 @@ from pydantic import BaseModel
 
 
 class RBACContext(BaseModel):
-    """Identifies who is asking, for filtering purposes."""
+    """Identifies who is asking, for filtering purposes.
+
+    `allowed_roles` is the requesting user's effective role set (typically a
+    single role). Retrieval keeps chunks whose stored `allowed_roles` overlap
+    this set, so RBAC happens before any vector reaches the LLM.
+    """
     org_id: str
     workspace_id: str
     department_id: str
-    role: str   # e.g. "Manager" — checked against each chunk's allowed_roles
+    role: str            # e.g. "Manager" — the requesting user's own role
+    allowed_roles: List[str]   # roles permitted to retrieve this chunk
 
 
 class RetrievedChunk(BaseModel):

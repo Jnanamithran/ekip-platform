@@ -5,9 +5,9 @@ import httpx
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic import ValidationError
-from typing import Optional
+from typing import List, Optional
 
 from retrieval.schema import RBACContext
 from retrieval.service import hybrid_retrieve
@@ -29,11 +29,33 @@ def health():
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+ALLOWED_ROLES = {"Admin", "Owner", "Manager", "Employee", "Intern"}
+
+
 class RBACInfo(BaseModel):
     org_id: str
     workspace_id: str
     department_id: str
     role: str
+    allowed_roles: Optional[List[str]] = None   # multiple roles allowed to see uploaded chunks
+    user_id: Optional[str] = None               # real uploader id, for audit trail
+
+    @field_validator("allowed_roles", mode="after")
+    @classmethod
+    def _validate_allowed_roles(
+        cls, value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        if value is None:
+            return None
+        seen: List[str] = []
+        for r in value:
+            if r not in ALLOWED_ROLES:
+                raise ValueError(
+                    f"Invalid role: {r!r}. Must be one of {sorted(ALLOWED_ROLES)}"
+                )
+            if r not in seen:
+                seen.append(r)
+        return seen or None
 
 
 class AskRequest(BaseModel):
@@ -95,11 +117,13 @@ async def ask(req: AskRequest):
     The token is also forwarded so the AI service can log who asked what.
     '''
     # Normalize the incoming RBAC shape into the retrieval-layer contract
+    allowed_roles = req.rbac.allowed_roles or [req.rbac.role]
     rbac = RBACContext(
         org_id        = req.rbac.org_id,
         workspace_id  = req.rbac.workspace_id,
         department_id = req.rbac.department_id,
         role          = req.rbac.role,
+        allowed_roles = allowed_roles,
     )
 
     if not req.token:
@@ -206,13 +230,14 @@ async def ingest(
             from embeddings.service import embed_and_upsert
             from embeddings.rbac_schema import RBACMetadata
 
+            allowed_roles = rbac_info.allowed_roles or [rbac_info.role]
             rbac_metadata = RBACMetadata(
                 org_id       = rbac_info.org_id,
                 workspace_id = rbac_info.workspace_id,
                 department_id = rbac_info.department_id,
                 role         = rbac_info.role,
-                allowed_roles = [rbac_info.role],
-                uploaded_by  = 'user-' + str(uuid.uuid4())[:8],
+                allowed_roles = allowed_roles,
+                uploaded_by  = rbac_info.user_id or 'user-' + str(uuid.uuid4())[:8],
             )
 
             await update_document('Splitting pages into searchable chunks', 45)
