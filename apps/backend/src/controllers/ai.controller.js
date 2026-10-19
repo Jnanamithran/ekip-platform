@@ -259,7 +259,11 @@ async function ingestDocument({ user, token, buffer, filename: rawFilename, mime
 
     // Build FormData for multipart upload
     const form = new FORM_DATA();
-    form.append('rbac', JSON.stringify({ ...rbacFromReq({ user }), allowed_roles: allowedRoles }));
+        form.append('rbac', JSON.stringify({
+      ...rbacFromReq({ user }),
+      user_id: user.user_id,
+      allowed_roles: allowedRoles,
+    }));
     form.append('token', token || '');
     form.append('document_id', documentId);
     form.append('file', buffer, { filename, contentType: mimetype });
