@@ -44,6 +44,7 @@ model User {
   email         String     @unique
   password_hash String
   role          Role
+  active        Boolean    @default(true)
   department    Department @relation(fields: [department_id], references: [id])
   documents     Document[]
   refresh_tokens RefreshToken[]

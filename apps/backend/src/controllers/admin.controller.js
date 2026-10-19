@@ -1,10 +1,16 @@
 const bcrypt = require('bcryptjs');
 const { PrismaClient, Role } = require('@prisma/client');
-
+const crypto = require('crypto');
 const prisma = new PrismaClient();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
+// Finds a user only inside the admin's own organization
+function findUserInOrg(id, orgId) {
+  return prisma.user.findFirst({
+    where: { id, department: { workspace: { org_id: orgId } } },
+    select: { id: true, email: true, role: true, department_id: true, active: true },
+  });
+}
 // POST /admin/users  (Admin only)
 async function createUser(req, res) {
   try {
@@ -277,7 +283,112 @@ async function listDepartments(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
+// PATCH /admin/users/:id  (Admin only)
+async function updateUser(req, res) {
+  try {
+    const target = await findUserInOrg(req.params.id, req.user.org_id);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+
+    const { email, role, department_id } = req.body || {};
+    const data = {};
+
+    if (email !== undefined) {
+      if (typeof email !== 'string' || !EMAIL_RE.test(email)) {
+        return res.status(400).json({ error: 'Invalid email address' });
+      }
+      data.email = email.trim().toLowerCase();
+    }
+
+    if (role !== undefined) {
+      if (!Object.values(Role).includes(role)) {
+        return res.status(400).json({ error: `role must be one of: ${Object.values(Role).join(', ')}` });
+      }
+      if (target.id === req.user.user_id && role !== target.role) {
+        return res.status(400).json({ error: 'You cannot change your own role' });
+      }
+      data.role = role;
+    }
+
+    if (department_id !== undefined) {
+      const dept = await prisma.department.findFirst({
+        where: { id: department_id, workspace: { org_id: req.user.org_id } },
+      });
+      if (!dept) return res.status(404).json({ error: 'Department not found' });
+      data.department_id = department_id;
+    }
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: target.id },
+      data,
+      select: { id: true, email: true, role: true, department_id: true, active: true },
+    });
+    res.json({ user });
+  } catch (err) {
+    if (err.code === 'P2002') {
+      return res.status(409).json({ error: 'A user with that email already exists' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+// POST /admin/users/:id/reset-password  (Admin only)
+async function resetPassword(req, res) {
+  try {
+    const target = await findUserInOrg(req.params.id, req.user.org_id);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+
+    const tempPassword = crypto.randomBytes(9).toString('base64url');
+    const password_hash = await bcrypt.hash(tempPassword, 10);
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: target.id }, data: { password_hash } }),
+      prisma.refreshToken.deleteMany({ where: { user_id: target.id } }),
+    ]);
+
+    res.json({ temp_password: tempPassword, message: 'Share this with the user securely.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+// Shared by deactivate and reactivate
+async function setActive(req, res, active) {
+  try {
+    const target = await findUserInOrg(req.params.id, req.user.org_id);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+
+    if (!active && target.id === req.user.user_id) {
+      return res.status(400).json({ error: 'You cannot deactivate your own account' });
+    }
+
+    if (active) {
+      await prisma.user.update({ where: { id: target.id }, data: { active: true } });
+    } else {
+      await prisma.$transaction([
+        prisma.user.update({ where: { id: target.id }, data: { active: false } }),
+        prisma.refreshToken.deleteMany({ where: { user_id: target.id } }),
+      ]);
+    }
+    res.json({ message: active ? 'User reactivated.' : 'User deactivated.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+const deactivateUser = (req, res) => setActive(req, res, false);
+const reactivateUser = (req, res) => setActive(req, res, true);
 module.exports = {
+  updateUser,
+  resetPassword,
+  deactivateUser,
+  reactivateUser,
   createUser,
   listUsers,
   createWorkspace,
