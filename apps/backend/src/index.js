@@ -19,7 +19,7 @@ app.use(cors({ origin: frontendOrigins }));
 app.use('/auth', require('./routes/auth.routes'));
 app.use('/admin', require('./routes/admin.routes'));
 app.use('/organizations', require('./routes/organization.routes'));
-
+app.use('/integrations', require('./routes/integrations.routes'));
 // AI service proxy routes (query, ingest, health)
 app.use('/ai', require('./routes/ai.routes'));
 
