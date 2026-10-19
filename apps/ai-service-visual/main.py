@@ -4,10 +4,11 @@ FastAPI microservice for ColPali visual document embedding and retrieval.
 Runs on port 8001 (separate from the text AI service on port 8000).
 
 Endpoints:
-  POST /visual/ingest  — render + embed all pages of a scanned PDF
-  POST /visual/search  — search visual collection with RBAC filter
+  POST /visual/ingest   — render + embed all pages of a scanned PDF
+  POST /visual/search   — search visual collection with RBAC filter
+  POST /visual/ask      — ColPali retrieve + Qwen2-VL answer (visual QA)
   DELETE /visual/document/{document_id} — remove all pages for a document
-  GET  /health         — liveness check
+  GET  /health          — liveness check
 """
 
 import os
@@ -23,6 +24,8 @@ from visual.colpali_embedder import (
     search_visual,
     delete_visual_document,
 )
+from visual.qwen_generator import answer_from_images, QWEN_MODEL
+from PIL import Image
 
 app = FastAPI(title="EKIP Visual AI Service", version="0.1.0")
 
@@ -66,6 +69,29 @@ class IngestResponse(BaseModel):
     filename:    str
     pages_upserted: int
     pipeline:    str = "visual"
+
+
+class VisualQARequest(BaseModel):
+    question:     str
+    org_id:       str
+    workspace_id: str
+    department_id: str
+    role:         str
+    top_k:        int = 4
+
+
+class VisualCitation(BaseModel):
+    filename: str
+    page_num: int
+    text:     str
+    type:     str = "visual"
+
+
+class VisualQAResponse(BaseModel):
+    answer:   str
+    citations: list[VisualCitation]
+    model:    str
+    pipeline: str = "visual"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -187,6 +213,83 @@ def search(req: VisualSearchRequest):
 
     except Exception as exc:
         print(f"[visual-ai] search error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/visual/ask", response_model=VisualQAResponse)
+async def ask_visual(req: VisualQARequest):
+    """
+    Full visual QA pipeline:
+      1. ColPali retrieval with RBAC filter (before retrieval — always)
+      2. Load page images from disk
+      3. Qwen2-VL generates grounded answer from page images
+    """
+    try:
+        rbac = {
+            "org_id":        req.org_id,
+            "workspace_id":  req.workspace_id,
+            "department_id": req.department_id,
+            "role":          req.role,
+        }
+
+        # Step 1: ColPali retrieval — RBAC applied BEFORE retrieval
+        top_pages = search_visual(
+            query  = req.question,
+            rbac   = rbac,
+            top_k  = req.top_k,
+        )
+
+        if not top_pages:
+            return VisualQAResponse(
+                answer   = "No relevant visual content found in your accessible documents.",
+                citations = [],
+                model    = QWEN_MODEL,
+            )
+
+        # Step 2: Load page images from disk
+        images = []
+        filenames = []
+        page_nums = []
+        for page in top_pages:
+            try:
+                img = Image.open(page["image_path"])
+                images.append(img)
+                filenames.append(page["filename"])
+                page_nums.append(page["page_num"])
+            except Exception:
+                continue
+
+        if not images:
+            return VisualQAResponse(
+                answer   = "Found matching pages but could not load their images.",
+                citations = [],
+                model    = QWEN_MODEL,
+            )
+
+        # Step 3: Qwen2-VL generates grounded answer
+        result = answer_from_images(
+            question  = req.question,
+            page_images = images,
+            filenames = filenames,
+            page_nums = page_nums,
+        )
+
+        return VisualQAResponse(
+            answer    = result["answer"],
+            citations = [
+                VisualCitation(
+                    filename = c["filename"],
+                    page_num = c["page_num"],
+                    text     = c["text"],
+                    type     = c.get("type", "visual"),
+                )
+                for c in result["citations"]
+            ],
+            model   = result["model"],
+        )
+
+    except Exception as exc:
+        print(f"[visual-ai] ask error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
 

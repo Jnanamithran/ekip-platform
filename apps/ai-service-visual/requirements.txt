@@ -4,5 +4,9 @@ uvicorn==0.54.0
 pymupdf==1.28.2
 qdrant-client==1.19.1
 Pillow==13.0.0
+transformers>=4.45.0
+bitsandbytes
+accelerate
+qwen-vl-utils
 # torch + torchvision installed separately with CUDA build:
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121

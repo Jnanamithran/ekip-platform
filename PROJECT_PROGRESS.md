@@ -1,6 +1,6 @@
 # EKIP — Project Progress Report
 
-> Generated: 10/15/2026 · Branch: `main` (clean, up to date with `origin/main` @ `8fe84c8`)
+> Generated: 10/20/2026 · Branch: `main` (clean, up to date with `origin/main` @ `a7da0bb`)
 >
 > This file records **how far the project has gone**, **which features are implemented**,
 > and **what has been completed so far**. For setup and usage, see [`README.md`](./README.md).
@@ -199,10 +199,10 @@ reranker → generation → citations).
 > The roadmap file itself still shows these boxes unchecked — it needs updating to match
 > the code.
 
-### Phase 2 — Visual Document Understanding ⬜ (not started)
+### Phase 2 — Visual Document Understanding 🔄 (in progress)
 
-- [ ] ColPali integration
-- [ ] Qwen2-VL for image/slide understanding
+- [x] ColPali integration (merged to main via PR #92)
+- [ ] Qwen2-VL for image/slide understanding (branch: ai/qwen2vl-visual-generation)
 
 ### Phase 3 — Production ⬜ (partially started)
 
