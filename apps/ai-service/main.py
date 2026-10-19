@@ -16,6 +16,7 @@ from generation.generator import generate_answer
 from citations.extractor import extract_citations
 from ingestion.service import ingest_document
 from chunking.service import chunk_document
+from visual.colpali_embedder import embed_and_upsert_visual
 
 app = FastAPI(title='EKIP AI Service', version='0.1.0')
 
@@ -241,6 +242,39 @@ async def ingest(
             )
 
             await update_document('Splitting pages into searchable chunks', 45)
+
+            # --- Route scanned/image-only docs to ColPali visual pipeline ---
+            if ingest_result.is_scanned_or_empty:
+                await update_document('Routing to visual (ColPali) pipeline', 50)
+                rbac_dict = {
+                    "org_id": rbac_info.org_id,
+                    "workspace_id": rbac_info.workspace_id,
+                    "department_id": rbac_info.department_id,
+                    "allowed_roles": allowed_roles,
+                    "uploaded_by": rbac_info.user_id or 'user-' + str(uuid.uuid4())[:8],
+                }
+                pages_upserted = embed_and_upsert_visual(
+                    pdf_path=str(file_path),
+                    document_id=document_id,
+                    filename=filename,
+                    rbac=rbac_dict,
+                    total_pages=ingest_result.total_pages,
+                )
+                await update_document(
+                    f'Indexed {pages_upserted} page(s) via ColPali visual pipeline',
+                    90,
+                    chunk_count=pages_upserted,
+                )
+                return {
+                    'message': 'Document processed successfully (visual pipeline)',
+                    'document_id': document_id,
+                    'filename': ingest_result.filename,
+                    'chunk_count': pages_upserted,
+                    'status': 'Indexed',
+                    'pipeline': 'visual',
+                }
+
+            # --- Existing text pipeline ---
             chunks = chunk_document(ingest_result, document_id=document_id)
             await update_document(
                 f'Created {len(chunks)} chunk(s)',

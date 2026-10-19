@@ -1,6 +1,6 @@
 # EKIP — Project Progress Report
 
-> Generated: 10/15/2026 · Branch: `main` (clean, up to date with `origin/main` @ `8fe84c8`)
+> Generated: 10/20/2026 · Branch: `ai/rbac-allowed-roles-owner` (clean, up to date with `origin/main` @ `9140d53`)
 >
 > This file records **how far the project has gone**, **which features are implemented**,
 > and **what has been completed so far**. For setup and usage, see [`README.md`](./README.md).
@@ -20,7 +20,7 @@ locally through Docker Compose with **no hosted LLM or public web search** invol
 | --- | --- | --- |
 | Frontend (React + Vite + Tailwind) | ✅ Functional | Real API-backed flows; demo/mock UI removed |
 | Backend (Express + Prisma) | ✅ Functional | Auth, admin, document, AI-proxy APIs operational |
-| AI service (FastAPI) | ✅ Functional | Full RAG pipeline wired end-to-end via `/ask` and `/ingest` |
+| AI service (FastAPI) | ✅ Functional | Full RAG pipeline wired end-to-end via `/ask` and `/ingest`; RBAC accepts multi-role `allowed_roles` and `Owner` role |
 | PostgreSQL (schema + migrations) | ✅ Integrated | 6 migrations applied; Prisma client generated |
 | Qdrant vector store | ✅ Integrated | RBAC-filtered dense + sparse indexes |
 | Ollama local LLM | ✅ Integrated | `llama3.2:3b` generation step |
@@ -64,10 +64,10 @@ Request flow that is now working end-to-end:
 | --- | --- | --- |
 | Ingestion | `ingestion/service.py`, `parsers/{pdf,docx,xlsx,txt}_parser.py` | Parses PDF, DOCX, XLSX, TXT into page-structured documents; file-type detection |
 | Chunking | `chunking/sliding_window.py`, `chunking/service.py` | Sliding-window chunking with page-boundary safety |
-| Embeddings | `embeddings/{embedder,service,qdrant_client,rbac_schema}.py` | Dense embedding generation + upsert into Qdrant with `org/workspace/department/role` metadata |
+| Embeddings | `embeddings/{embedder,service,qdrant_client,rbac_schema}.py` | Dense embedding generation + upsert into Qdrant with `org/workspace/department/allowed_roles` (multi-role) metadata |
 | Sparse retrieval | `retrieval/sparse_search.py` | BM25 keyword retrieval |
 | Hybrid retrieval | `retrieval/hybrid_search.py`, `retrieval/service.py` | Dense + sparse fused with Reciprocal Rank Fusion (RRF), top-k = 12 |
-| RBAC filtering | `retrieval/rbac_filter.py` | Access-control filter applied **before** passages are returned |
+| RBAC filtering | `retrieval/rbac_filter.py` | Access-control filter applied **before** passages are returned; Qdrant `MatchAny` on multi-role `allowed_roles` (supports `Owner`, `Admin`, `Manager`, `Employee`, `Intern`) |
 | Reranking | `reranking/reranker.py` | Cross-encoder rescoring, top_n = 4 |
 | Generation | `generation/generator.py` | Ollama (`llama3.2:3b`) with a RAG prompt template |
 | Citations | `citations/extractor.py` | Post-processes the answer into `[n]` citations mapped to document + page + excerpt |
@@ -194,7 +194,7 @@ reranker → generation → citations).
 - [x] Cross-encoder reranking
 - [x] Ollama LLM generation
 - [x] Citation post-processor
-- [x] RBAC metadata filter
+- [x] RBAC metadata filter (multi-role `allowed_roles` via Qdrant `MatchAny`; supports `Owner` role)
 
 > The roadmap file itself still shows these boxes unchecked — it needs updating to match
 > the code.
@@ -256,3 +256,4 @@ reranker → generation → citations).
    scanned PDFs.
 5. Harden auth & multi-tenancy (rate limiting, password policy, cross-org isolation tests).
 6. Add a retrieval/answer evaluation harness before calling the pipeline production-ready.
+7. Backend: add `Owner` to Prisma `Role` enum, assign org creator as `Owner`, and forward `allowed_roles`/`user_id` in `rbacFromReq` to the AI service (`apps/backend/src/controllers/ai.controller.js`).
