@@ -217,8 +217,8 @@ reranker → generation → citations).
 
 **Functional gaps**
 
-- No OCR — scanned / image-only PDFs yield no searchable text; PPTX and CSV formats are
-  unsupported.
+- OCR fallback for scanned / image-only PDFs (EasyOCR) is implemented in the AI service, but
+  PPTX and CSV formats are still unsupported.
 - No workspace question-usage analytics — the dashboard shows DB-backed totals only.
 - PDF preview only works for PDFs whose original file was retained (re-upload needed for
   older indexed documents); DOCX/XLSX/TXT citations have no preview.

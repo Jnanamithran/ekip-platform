@@ -62,7 +62,7 @@ fixed at the bottom of the Search view.
 
 | Format | Current extraction support |
 | --- | --- |
-| PDF | Text-based PDFs; OCR for scanned/image-only PDFs is not included |
+| PDF | Text-based PDFs; scanned/image-only pages fall back to EasyOCR before ColPali routing |
 | DOCX | Word paragraphs and tables |
 | XLSX | Spreadsheet content |
 | TXT | Plain text |
