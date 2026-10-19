@@ -1,6 +1,7 @@
 import os
 import tempfile
 import uuid
+import asyncio
 import httpx
 from pathlib import Path
 
@@ -17,6 +18,9 @@ from citations.extractor import extract_citations
 from ingestion.service import ingest_document
 from chunking.service import chunk_document
 
+from embeddings.qdrant_client import get_client
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
 app = FastAPI(title='EKIP AI Service', version='0.1.0')
 
 
@@ -30,6 +34,9 @@ def health():
 # ---------------------------------------------------------------------------
 
 ALLOWED_ROLES = {"Admin", "Owner", "Manager", "Employee", "Intern"}
+
+VISUAL_COLLECTION = "ekip_visual_documents"
+VISUAL_SERVICE_URL = os.getenv("VISUAL_SERVICE_URL", "http://ai-service-visual:8001")
 
 
 class RBACInfo(BaseModel):
@@ -78,6 +85,7 @@ class AskResponse(BaseModel):
     sources: list[CitationOut]
     model: str
     has_answer: bool
+    pipeline: str = "text"   # "text" | "visual" | "hybrid"
 
 
 async def report_progress(token: str, endpoint: str, **details):
@@ -103,6 +111,120 @@ def report_progress_sync(token: str, endpoint: str, **details):
 
 
 # ---------------------------------------------------------------------------
+# Visual-document detection + pipeline helpers
+# ---------------------------------------------------------------------------
+
+def has_visual_docs(rbac_dict: dict) -> bool:
+    """Check if this user has any visual-indexed documents in scope.
+
+    Scrolls the visual Qdrant collection with an RBAC filter (limit=1) and
+    returns True when at least one accessible visual page exists.
+    """
+    client = get_client()
+    rbac_filter = Filter(must=[
+        FieldCondition(key="org_id", match=MatchValue(value=rbac_dict["org_id"])),
+        FieldCondition(key="workspace_id", match=MatchValue(value=rbac_dict["workspace_id"])),
+        FieldCondition(key="department_id", match=MatchValue(value=rbac_dict["department_id"])),
+        FieldCondition(key="allowed_roles", match=MatchValue(value=rbac_dict["role"])),
+    ])
+    result = client.scroll(
+        collection_name=VISUAL_COLLECTION,
+        scroll_filter=rbac_filter,
+        limit=1,
+        with_vectors=False,
+    )
+    return len(result[0]) > 0
+
+
+async def run_text_pipeline(query: str, rbac: RBACContext, token: str, request_id: str) -> dict:
+    """Run the text RAG pipeline and return a normalized result dict."""
+
+    async def update_search(stage: str):
+        await report_progress(
+            token,
+            '/ai/ask/progress',
+            request_id=request_id,
+            stage=stage,
+        )
+
+    # --- Step 6: hybrid retrieval (dense + sparse + RRF fusion) ---
+    await update_search('Searching your authorized documents')
+    chunks = hybrid_retrieve(query=query, rbac=rbac, top_k=12)
+
+    # --- Step 7: cross-encoder rerank ---
+    await update_search(f'Ranking {len(chunks)} relevant passages')
+    reranked = rerank(query=query, chunks=chunks, top_n=4)
+
+    # --- Step 8: Ollama LLM generation ---
+    await update_search('Drafting an answer from the selected passages')
+    generation_result = generate_answer(
+        query=query,
+        chunks=reranked,
+    )
+
+    # --- Step 9: citation extraction ---
+    await update_search('Checking the answer and its source citations')
+    cited = extract_citations(generation_result, query)
+
+    # Map citations to the frontend shape (AnswerResult.jsx / CitationTab.jsx)
+    sources = [
+        {
+            'id': c.chunk_id,
+            'document_id': c.document_id,
+            'filename': c.filename,
+            'page': c.page_num,
+            'excerpt': c.chunk_text,
+        }
+        for c in cited.citations
+    ]
+
+    return {
+        'answer': cited.answer,
+        'sources': sources,
+        'model': cited.model,
+        'has_answer': cited.has_answer,
+        'pipeline': 'text',
+    }
+
+
+async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
+    """Ask the visual service and normalize its citations to CitationOut shape."""
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            f'{VISUAL_SERVICE_URL}/visual/ask',
+            json={
+                'question': question,
+                'org_id': rbac_dict['org_id'],
+                'workspace_id': rbac_dict['workspace_id'],
+                'department_id': rbac_dict['department_id'],
+                'role': rbac_dict['role'],
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    citations = [
+        {
+            'id': f"visual-{c.get('document_id', 'unknown')}-{c['page_num']}",
+            'document_id': c.get('document_id', 'unknown'),
+            'filename': c['filename'],
+            'page': c['page_num'],
+            'excerpt': c['text'],
+        }
+        for c in payload.get('citations', [])
+    ]
+
+    return {
+        'answer': payload.get('answer', ''),
+        'sources': citations,
+        'model': payload.get('model', ''),
+        'has_answer': bool(payload.get('answer')),
+        'pipeline': 'visual',
+    }
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -115,6 +237,9 @@ async def ask(req: AskRequest):
 
     RBAC context is injected by the backend from the verified JWT token.
     The token is also forwarded so the AI service can log who asked what.
+
+    When the user's accessible documents include visual-indexed pages, the
+    text and visual pipelines run in parallel and their results are merged.
     '''
     # Normalize the incoming RBAC shape into the retrieval-layer contract
     allowed_roles = req.rbac.allowed_roles or [req.rbac.role]
@@ -129,50 +254,45 @@ async def ask(req: AskRequest):
     if not req.token:
         raise HTTPException(status_code=401, detail='Authentication token is required')
 
-    async def update_search(stage: str):
-        await report_progress(
-            req.token,
-            '/ai/ask/progress',
-            request_id=req.request_id,
-            stage=stage,
+    rbac_dict = {
+        'org_id':        req.rbac.org_id,
+        'workspace_id':  req.rbac.workspace_id,
+        'department_id': req.rbac.department_id,
+        'role':          req.rbac.role,
+    }
+
+    visual_available = has_visual_docs(rbac_dict)
+
+    if visual_available:
+        # Run text and visual in parallel, merge citations
+        text_result, visual_result = await asyncio.gather(
+            run_text_pipeline(req.query, rbac, req.token, req.request_id),
+            run_visual_pipeline(req.query, rbac_dict),
         )
 
-    # --- Step 6: hybrid retrieval (dense + sparse + RRF fusion) ---
-    await update_search('Searching your authorized documents')
-    chunks = hybrid_retrieve(query=req.query, rbac=rbac, top_k=12)
+        # Merge citations from both pipelines
+        all_citations = text_result['sources'] + visual_result['sources']
 
-    # --- Step 7: cross-encoder rerank ---
-    await update_search(f'Ranking {len(chunks)} relevant passages')
-    reranked = rerank(query=req.query, chunks=chunks, top_n=4)
+        # Use answer from pipeline with more citations (more grounded)
+        primary = text_result if len(text_result['sources']) >= \
+            len(visual_result['sources']) else visual_result
 
-    # --- Step 8: Ollama LLM generation ---
-    await update_search('Drafting an answer from the selected passages')
-    generation_result = generate_answer(
-        query=req.query,
-        chunks=reranked,
-    )
+        return AskResponse(
+            answer=primary['answer'],
+            sources=all_citations,
+            model=primary['model'],
+            has_answer=primary['has_answer'],
+            pipeline='hybrid',
+        )
 
-    # --- Step 9: citation extraction ---
-    await update_search('Checking the answer and its source citations')
-    cited = extract_citations(generation_result, req.query)
-
-    # Map citations to the frontend shape (AnswerResult.jsx / CitationTab.jsx)
-    sources = [
-        {
-            'id': c.chunk_id,
-            'document_id': c.document_id,
-            'filename': c.filename,
-            'page': c.page_num,
-            'excerpt': c.chunk_text,
-        }
-        for c in cited.citations
-    ]
-
+    # Text only (existing behavior)
+    text_result = await run_text_pipeline(req.query, rbac, req.token, req.request_id)
     return AskResponse(
-        answer=cited.answer,
-        sources=sources,
-        model=cited.model,
-        has_answer=cited.has_answer,
+        answer=text_result['answer'],
+        sources=text_result['sources'],
+        model=text_result['model'],
+        has_answer=text_result['has_answer'],
+        pipeline=text_result['pipeline'],
     )
 
 

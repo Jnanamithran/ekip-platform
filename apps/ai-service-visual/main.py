@@ -81,10 +81,11 @@ class VisualQARequest(BaseModel):
 
 
 class VisualCitation(BaseModel):
-    filename: str
-    page_num: int
-    text:     str
-    type:     str = "visual"
+    filename:   str
+    page_num:   int
+    text:       str
+    type:       str = "visual"
+    document_id: str
 
 
 class VisualQAResponse(BaseModel):
@@ -250,12 +251,14 @@ async def ask_visual(req: VisualQARequest):
         images = []
         filenames = []
         page_nums = []
+        document_ids = []
         for page in top_pages:
             try:
                 img = Image.open(page["image_path"])
                 images.append(img)
                 filenames.append(page["filename"])
                 page_nums.append(page["page_num"])
+                document_ids.append(page["document_id"])
             except Exception:
                 continue
 
@@ -268,20 +271,22 @@ async def ask_visual(req: VisualQARequest):
 
         # Step 3: Qwen2-VL generates grounded answer
         result = answer_from_images(
-            question  = req.question,
+            question    = req.question,
             page_images = images,
-            filenames = filenames,
-            page_nums = page_nums,
+            filenames   = filenames,
+            page_nums   = page_nums,
+            document_ids = document_ids,
         )
 
         return VisualQAResponse(
             answer    = result["answer"],
             citations = [
                 VisualCitation(
-                    filename = c["filename"],
-                    page_num = c["page_num"],
-                    text     = c["text"],
-                    type     = c.get("type", "visual"),
+                    filename    = c["filename"],
+                    page_num    = c["page_num"],
+                    text        = c["text"],
+                    type        = c.get("type", "visual"),
+                    document_id = c.get("document_id", "unknown"),
                 )
                 for c in result["citations"]
             ],

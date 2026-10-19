@@ -12,6 +12,7 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
         reported_stages.append(details['stage'])
 
     monkeypatch.setattr(main, 'report_progress', fake_report_progress)
+    monkeypatch.setattr(main, 'has_visual_docs', lambda rbac_dict: False)
     monkeypatch.setattr(main, 'hybrid_retrieve', lambda query, rbac, top_k: ['candidate'])
     monkeypatch.setattr(main, 'rerank', lambda query, chunks, top_n: ['selected'])
     monkeypatch.setattr(main, 'generate_answer', lambda query, chunks: 'draft')
