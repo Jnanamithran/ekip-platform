@@ -3,6 +3,10 @@ const { authenticate, requireRole } = require('../middleware/auth.middleware');
 const {
   createUser,
   listUsers,
+  updateUser,
+  resetPassword,
+  deactivateUser,
+  reactivateUser,
   createWorkspace,
   listWorkspaces,
   getWorkspaceDashboard,
@@ -18,6 +22,10 @@ router.use(authenticate, requireRole('Admin'));
 
 router.post('/users', createUser);
 router.get('/users', listUsers);
+router.patch('/users/:id', updateUser);
+router.post('/users/:id/reset-password', resetPassword);
+router.patch('/users/:id/deactivate', deactivateUser);
+router.patch('/users/:id/reactivate', reactivateUser);
 
 router.post('/workspaces', createWorkspace);
 router.get('/workspaces', listWorkspaces);
@@ -28,4 +36,3 @@ router.post('/departments', createDepartment);
 router.get('/departments', listDepartments);
 
 module.exports = router;
-    

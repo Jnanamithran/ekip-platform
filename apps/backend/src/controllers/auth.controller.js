@@ -51,9 +51,16 @@ async function login(req, res) {
 
     const ok = user && (await bcrypt.compare(password, user.password_hash));
     if (!ok) {
+      const ok = user && (await bcrypt.compare(password, user.password_hash));
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-
+ // Deactivated accounts cannot log in
+    if (!user.active) {
+      return res.status(403).json({
+        error: 'Account deactivated. Contact your administrator.',
+        code: 'ACCOUNT_DEACTIVATED',
+      });
+    }
     res.json({
       access_token: buildAccessToken(user),
       refresh_token: await createRefreshToken(user.id),
@@ -129,7 +136,12 @@ async function refresh(req, res) {
     if (record.expires_at < new Date()) {
       return res.status(401).json({ error: 'Refresh token expired' });
     }
-
+    if (!record.user.active) {
+      return res.status(403).json({
+        error: 'Account deactivated. Contact your administrator.',
+        code: 'ACCOUNT_DEACTIVATED',
+      });
+    }
     // The user is re-read from the database, so a changed role or
     // department shows up in the new access token
     res.json({

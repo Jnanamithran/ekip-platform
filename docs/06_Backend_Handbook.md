@@ -31,12 +31,14 @@ These are the field names agreed with the AI service.
 - 200: `{ "access_token": "...", "refresh_token": "..." }`
 - 400: email or password missing
 - 401: invalid email or password (same message for both cases)
+- 403: account deactivated (`code: "ACCOUNT_DEACTIVATED"`), returned only after the correct password
 
 **POST /auth/refresh**
 - Body: `{ "refresh_token": "..." }`
 - 200: a new `access_token` and a new `refresh_token`. The old refresh token is deleted, so it cannot be used again.
 - 400: `refresh_token` missing
 - 401: invalid or expired refresh token
+- 403: account deactivated (`code: "ACCOUNT_DEACTIVATED"`)
 
 **POST /auth/logout**
 - Body: `{ "refresh_token": "..." }`
