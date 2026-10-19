@@ -32,3 +32,8 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# AI service test fixtures (sample data used by tests, excluded from commits)
+apps/ai-service/tests/fixtures/*.pdf
+apps/ai-service/tests/fixtures/*.docx
+apps/ai-service/tests/fixtures/*.xlsx
