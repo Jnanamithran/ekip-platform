@@ -64,6 +64,7 @@ def answer_from_images(
     page_images: list,
     filenames: list[str],
     page_nums: list[int],
+    document_ids: list[str] | None = None,
 ) -> dict:
     """
     Generate a grounded answer from retrieved page images.
@@ -118,10 +119,11 @@ def answer_from_images(
             {
                 "filename": fn,
                 "page_num": pn,
+                "document_id": document_ids[i] if document_ids else "unknown",
                 "text": f"[Visual content — page {pn} of {fn}]",
                 "type": "visual",
             }
-            for fn, pn in zip(filenames, page_nums)
+            for i, (fn, pn) in enumerate(zip(filenames, page_nums))
         ],
         "model": QWEN_MODEL,
         "pipeline": "visual",
