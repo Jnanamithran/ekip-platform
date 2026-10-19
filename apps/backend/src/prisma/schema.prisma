@@ -48,6 +48,7 @@ model User {
   department    Department @relation(fields: [department_id], references: [id])
   documents     Document[]
   refresh_tokens RefreshToken[]
+  integration_tokens IntegrationToken[]
 }
 
 model Document {
@@ -97,4 +98,17 @@ model RefreshToken {
   expires_at DateTime
   created_at DateTime @default(now())
   user       User     @relation(fields: [user_id], references: [id])
+}
+
+model IntegrationToken {
+  id            String    @id @default(uuid())
+  user_id       String
+  provider      String
+  access_token  String
+  refresh_token String?
+  expires_at    DateTime?
+  created_at    DateTime  @default(now())
+  user          User      @relation(fields: [user_id], references: [id])
+
+  @@unique([user_id, provider])
 }
