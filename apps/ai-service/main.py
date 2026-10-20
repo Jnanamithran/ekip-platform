@@ -81,6 +81,7 @@ class CitationOut(BaseModel):
     filename: str
     page: int
     excerpt: str
+    type: str = "text"  # "text" | "visual" — visual = ColPali + Qwen2-VL page
 
 
 class AskResponse(BaseModel):
@@ -187,6 +188,7 @@ async def run_text_pipeline(query: str, rbac: RBACContext, token: str, request_i
             'filename': c.filename,
             'page': c.page_num,
             'excerpt': c.chunk_text,
+            'type': 'text',
         }
         for c in cited.citations
     ]
@@ -224,6 +226,7 @@ async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
             'filename': c['filename'],
             'page': c['page_num'],
             'excerpt': c['text'],
+            'type': c.get('type', 'visual'),
         }
         for c in payload.get('citations', [])
     ]

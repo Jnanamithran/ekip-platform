@@ -94,6 +94,7 @@ async function ask(req, res) {
       filename: s.filename,
       page: s.page,
       excerpt: s.excerpt,
+      type: s.type || 'text',
     }));
     const sourceDocumentCount = new Set(sources.map((source) => source.filename)).size;
     const answerSummary = sources.length

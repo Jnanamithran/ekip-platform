@@ -201,6 +201,32 @@ export async function getPdfPreview(documentId) {
 }
 
 /**
+ * Fetch the rendered JPEG for a visual (ColPali) citation page.
+ * Requires a valid JWT. Page numbers are 1-based.
+ *
+ * Backend route: GET /ai/documents/:id/page-image/:page_num
+ * Response: image/jpeg blob
+ */
+export async function getPageImage(documentId, pageNum) {
+    const page = Number(pageNum) > 0 ? Math.floor(Number(pageNum)) : 1;
+    const path =
+        '/ai/documents/' + encodeURIComponent(documentId) + '/page-image/' + page;
+    const request = (token) => fetch(API_URL + path, {
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+
+    let response = await request(accessToken);
+    if (response.status === 401) {
+        response = await request(await refreshAccessToken());
+    }
+    if (!response.ok) {
+        const data = await parseJsonSafe(response);
+        throw new Error(data?.error ?? 'Could not load page image (' + response.status + ')');
+    }
+    return response.blob();
+}
+
+/**
  * Upload and process a document through the ingestion pipeline.
  * Requires a valid JWT. The file is parsed, chunked, embedded, and
  * upserted into Qdrant with RBAC metadata.
