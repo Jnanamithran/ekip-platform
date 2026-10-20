@@ -97,6 +97,20 @@ All four routes only act on users inside the admin's own organization. A user in
 ### AI service context
 Query time sends `org_id`, `workspace_id`, `department_id` and `role`. Document upload sends `org_id`, `workspace_id`, `department_id`, `allowed_roles` and `uploaded_by`. All values come from `req.user`. (Upload and query routes are not built yet.)
 
+## Analytics (Admin only)
+
+**GET /admin/analytics/queries**
+- 200: `{ "data": [{ "date": "2026-10-20", "count": 12 }, ...] }`. The last 7 days (UTC), oldest first. Every day is present, with `count: 0` when nobody asked a question.
+- Counts the questions answered for users in the admin's own organization. The organization comes from the token, not from the request.
+- 401: no or invalid token
+- 403: caller is not an Admin
+
+**Design decisions**
+- Admin-only, whole organization, UTC days. Managers and per-workspace views are not included yet.
+- `AiAnswerHistory` stores only `user_id`, so the endpoint first finds the organization's users, then counts their rows.
+
+**Known limitation:** counts come from `AiAnswerHistory`. "Clear history" (`DELETE /ai/history`) deletes a user's rows, so the chart goes down when users clear their history. Only answered questions are recorded. A permanent fix (a soft-delete flag or a separate query log) is a schema decision.
+
 ## Google Drive integration
 
 Users connect their Google Drive, pick files, and choose `allowed_roles` per file in the EKIP UI. EKIP downloads each file and ingests it with that access list. Drive's own permissions are ignored. EKIP's RBAC applies.
