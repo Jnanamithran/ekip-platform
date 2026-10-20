@@ -36,7 +36,7 @@ def health():
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
-ALLOWED_ROLES = {"Admin", "Manager", "Employee", "Intern"}
+ALLOWED_ROLES = {"Admin", "Owner", "Manager", "Employee", "Intern"}
 
 VISUAL_COLLECTION = "ekip_visual_documents"
 VISUAL_SERVICE_URL = os.getenv("VISUAL_SERVICE_URL", "http://ai-service-visual:8001")

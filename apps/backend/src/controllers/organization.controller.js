@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
-const { validatePassword } = require('../utils/passwordPolicy');
+
 const prisma = new PrismaClient();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,9 +27,8 @@ async function createOrganization(req, res) {
     if (!EMAIL_RE.test(admin_email)) {
       return res.status(400).json({ error: 'Invalid email address' });
     }
-    const passwordErrors = validatePassword(admin_password);
-    if (passwordErrors.length) {
-      return res.status(400).json({ error: passwordErrors.join(' '), code: 'WEAK_PASSWORD' });
+    if (admin_password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
     const password_hash = await bcrypt.hash(admin_password, 10);
