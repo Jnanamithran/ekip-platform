@@ -273,3 +273,36 @@ export async function deleteDocument(id) {
 export async function getQueryAnalytics() {
     return apiFetch('/admin/analytics/queries');
 }
+
+// ---------------------------------------------------------------------------
+// Admin: user management
+// ---------------------------------------------------------------------------
+
+export async function getAdminUsers(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return apiFetch('/admin/users' + (qs ? '?' + qs : ''));
+}
+
+export async function updateAdminUser(id, body) {
+    return apiFetch('/admin/users/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+    });
+}
+
+export async function resetUserPassword(id) {
+    return apiFetch('/admin/users/' + encodeURIComponent(id) + '/reset-password', {
+        method: 'POST',
+    });
+}
+
+export async function setUserActive(id, active) {
+    const action = active ? 'reactivate' : 'deactivate';
+    return apiFetch('/admin/users/' + encodeURIComponent(id) + '/' + action, {
+        method: 'PATCH',
+    });
+}
+
+export async function getDepartments() {
+    return apiFetch('/admin/departments');
+}
