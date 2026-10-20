@@ -13,13 +13,14 @@ const {
   updateWorkspace,
   createDepartment,
   listDepartments,
+  queryAnalytics
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
 
 // Every route in this file needs a valid token AND the Admin role.
 router.use(authenticate, requireRole('Admin'));
-
+router.get('/analytics/queries', queryAnalytics);
 router.post('/users', createUser);
 router.get('/users', listUsers);
 router.patch('/users/:id', updateUser);

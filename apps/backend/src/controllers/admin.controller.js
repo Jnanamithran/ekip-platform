@@ -384,6 +384,51 @@ async function setActive(req, res, active) {
 
 const deactivateUser = (req, res) => setActive(req, res, false);
 const reactivateUser = (req, res) => setActive(req, res, true);
+// GET /admin/analytics/queries  (Admin only)
+// Questions asked per day over the last 7 days (UTC), for the admin's own organization
+async function queryAnalytics(req, res) {
+  try {
+    const DAYS = 7;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const now = new Date();
+    const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const firstDayStart = todayStart - (DAYS - 1) * DAY_MS;
+
+    // History rows only store user_id, so find this organization's users first.
+    // The org comes from the token, never from the request.
+    const users = await prisma.user.findMany({
+      where: { department: { workspace: { org_id: req.user.org_id } } },
+      select: { id: true },
+    });
+    const userIds = users.map((u) => u.id);
+
+    const rows = userIds.length
+      ? await prisma.aiAnswerHistory.findMany({
+          where: { user_id: { in: userIds }, created_at: { gte: new Date(firstDayStart) } },
+          select: { created_at: true },
+        })
+      : [];
+
+    // Count rows per day
+    const counts = {};
+    for (const row of rows) {
+      const day = row.created_at.toISOString().slice(0, 10);
+      counts[day] = (counts[day] || 0) + 1;
+    }
+
+    // Always return all 7 days, oldest first, even when the count is 0
+    const data = [];
+    for (let i = 0; i < DAYS; i++) {
+      const day = new Date(firstDayStart + i * DAY_MS).toISOString().slice(0, 10);
+      data.push({ date: day, count: counts[day] || 0 });
+    }
+
+    res.json({ data });
+  } catch (err) {
+    console.error('[admin] query analytics failed:', err.message);
+    res.status(500).json({ error: 'Failed to load query analytics' });
+  }
+}
 module.exports = {
   updateUser,
   resetPassword,
@@ -397,4 +442,5 @@ module.exports = {
   updateWorkspace,
   createDepartment,
   listDepartments,
+  queryAnalytics,
 };
