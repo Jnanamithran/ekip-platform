@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const aiController = require('../controllers/ai.controller');
-const { authenticate } = require('../middleware/auth.middleware');
+const { authenticate, requireRole } = require('../middleware/auth.middleware');
 const { queryLimiter, uploadLimiter } = require('../middleware/rateLimiter');
 
 const upload = multer({
@@ -25,6 +25,12 @@ router.delete('/history', aiController.clearAnswerHistory);
 
 // Upload and process a document (ingestion pipeline)
 router.post('/ingest',uploadLimiter, upload.single('file'), aiController.ingest);
+router.post(
+  '/documents/:id/reindex',
+  uploadLimiter,
+  requireRole('Admin', 'Manager'),
+  aiController.reindexDocument
+);
 router.post('/documents/:id/progress', aiController.updateDocumentProgress);
 router.get('/documents/:id/preview', aiController.previewDocument);
 

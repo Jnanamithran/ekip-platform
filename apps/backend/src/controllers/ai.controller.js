@@ -8,6 +8,12 @@ const { PrismaClient, Role } = require('@prisma/client');
 // AI service base URL (set via env in Docker; default to localhost for dev)
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 const QDRANT_URL = process.env.QDRANT_URL || 'http://localhost:6333';
+const DOCUMENT_MIME_TYPES = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  txt: 'text/plain',
+};
 const UPLOAD_STORAGE_DIR = path.resolve(
   process.env.UPLOAD_STORAGE_DIR || path.join(__dirname, '../../uploads')
 );
@@ -333,6 +339,149 @@ async function ingest(req, res) {
   });
   res.status(status).json(body);
 }
+
+async function deleteDocumentVectors(collection, documentId) {
+  try {
+    await axios.get(`${QDRANT_URL}/collections/${collection}`);
+  } catch (err) {
+    if (err.response?.status === 404) return;
+    throw err;
+  }
+
+  const deletion = await axios.post(
+    `${QDRANT_URL}/collections/${collection}/points/delete?wait=true`,
+    {
+      filter: {
+        must: [{ key: 'document_id', match: { value: documentId } }],
+      },
+    }
+  );
+  if (deletion.data.status !== 'ok') {
+    throw new Error(`Qdrant did not confirm deletion from ${collection}`);
+  }
+}
+
+async function reindexDocument(req, res) {
+  const { id } = req.params;
+
+  try {
+    const document = await prisma.document.findUnique({ where: { id } });
+    if (!document) {
+      return res.status(404).json({ error: 'Document not found.' });
+    }
+    if (document.department_id !== req.user.department_id) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
+    if (document.status === 'Processing') {
+      return res.status(409).json({ error: 'Document is already being processed.' });
+    }
+    if (!document.storage_key) {
+      return res.status(409).json({
+        error: 'The original file is unavailable. Re-upload this document to re-index it.',
+      });
+    }
+
+    const mimetype = DOCUMENT_MIME_TYPES[document.file_type];
+    if (!mimetype) {
+      return res.status(415).json({ error: 'This document type cannot be re-indexed.' });
+    }
+    if (
+      !document.allowed_roles.length ||
+      !document.allowed_roles.every((role) => Object.values(Role).includes(role))
+    ) {
+      return res.status(409).json({
+        error: 'The document has no valid access roles and cannot be re-indexed.',
+      });
+    }
+
+    let buffer;
+    try {
+      buffer = await fs.readFile(storedDocumentPath(document.storage_key));
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return res.status(409).json({
+          error: 'The original file is unavailable. Re-upload this document to re-index it.',
+        });
+      }
+      throw err;
+    }
+
+    const claimed = await prisma.document.updateMany({
+      where: {
+        id,
+        department_id: req.user.department_id,
+        status: { not: 'Processing' },
+      },
+      data: {
+        status: 'Processing',
+        stage: 'Preparing document for re-indexing',
+        progress: 0,
+        chunk_count: 0,
+      },
+    });
+    if (!claimed.count) {
+      return res.status(409).json({ error: 'Document is already being processed.' });
+    }
+
+    try {
+      await deleteDocumentVectors('ekip_documents', id);
+      await deleteDocumentVectors('ekip_visual_documents', id);
+
+      const form = new FORM_DATA();
+      form.append('rbac', JSON.stringify({
+        ...rbacFromReq(req),
+        user_id: document.uploaded_by,
+        allowed_roles: document.allowed_roles,
+      }));
+      form.append('token', req.headers['x-ai-token'] || '');
+      form.append('document_id', id);
+      form.append('file', buffer, {
+        filename: document.filename,
+        contentType: mimetype,
+      });
+
+      const response = await axios.post(`${AI_SERVICE_URL}/ingest`, form, {
+        headers: { ...form.getHeaders() },
+        timeout: 10 * 60 * 1000,
+      });
+
+      await prisma.document.update({
+        where: { id },
+        data: {
+          status: response.data.status || 'Indexed',
+          stage: 'Complete',
+          progress: 100,
+          chunk_count: response.data.chunk_count || 0,
+        },
+      });
+      return res.json({ message: 'Re-indexing complete.', id });
+    } catch (err) {
+      console.error('[ai] document re-index failed:', err.message);
+      await prisma.document.update({
+        where: { id },
+        data: {
+          status: err.code === 'ECONNABORTED' ? 'Timed out' : 'Failed',
+          stage: err.code === 'ECONNABORTED' ? 'Processing timed out' : 'Processing failed',
+        },
+      });
+      if (err.response && err.config?.url === `${AI_SERVICE_URL}/ingest`) {
+        return res.status(err.response.status).json({
+          error: err.response.data?.detail || 'AI service rejected the document',
+        });
+      }
+      if (err.code === 'ECONNABORTED') {
+        return res.status(504).json({
+          error: 'Document processing timed out; check its status before retrying',
+        });
+      }
+      return res.status(500).json({ error: 'Failed to re-index document' });
+    }
+  } catch (err) {
+    console.error('[ai] /documents/:id/reindex failed:', err.message);
+    return res.status(500).json({ error: 'Failed to re-index document' });
+  }
+}
+
 async function listDocuments(req, res) {
   try {
     const savedDocuments = await prisma.document.findMany({
@@ -621,7 +770,9 @@ async function updateDocumentProgress(req, res) {
       where: {
         id,
         department_id: req.user.department_id,
-        allowed_roles: { has: req.user.role },
+        ...(req.user.role === 'Admin' || req.user.role === 'Manager'
+          ? {}
+          : { allowed_roles: { has: req.user.role } }),
         status: 'Processing',
       },
       data: { stage, progress, ...(chunkCount === undefined ? {} : { chunk_count: chunkCount }) },
@@ -645,6 +796,7 @@ module.exports = {
   listAnswerHistory,
   clearAnswerHistory,
   ingest,ingestDocument,
+  reindexDocument,
   listDocuments,
   previewDocument,
   getDocumentPageImage,

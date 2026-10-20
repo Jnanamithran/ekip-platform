@@ -114,6 +114,15 @@ All four routes only act on users inside the admin's own organization. A user in
 ### AI service context
 Query time sends `org_id`, `workspace_id`, `department_id` and `role`. Document upload sends `org_id`, `workspace_id`, `department_id`, `allowed_roles` and `uploaded_by`. All values come from `req.user`. (Upload and query routes are not built yet.)
 
+### Document re-indexing
+
+**POST /ai/documents/:id/reindex** (Admin or Manager; same department)
+- Re-processes the retained original file using its existing document ID and access-role list.
+- Returns 200 after processing completes. Document status and progress are updated while the AI service runs.
+- Returns 404 if the document does not exist, 403 if it belongs to another department, 409 if it is already processing or its original file is unavailable, and 415 for unsupported file types.
+- Uses the same per-user upload rate limit as `POST /ai/ingest`.
+- Existing text and visual vectors for the document are removed before re-ingestion. A processing failure is recorded on the document as `Failed` or `Timed out`.
+
 ## Analytics (Admin only)
 
 **GET /admin/analytics/queries**
