@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { PrismaClient, Role } = require('@prisma/client');
 const crypto = require('crypto');
+const { validatePassword } = require('../utils/passwordPolicy');
 const prisma = new PrismaClient();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -24,8 +25,9 @@ async function createUser(req, res) {
     if (!EMAIL_RE.test(email)) {
       return res.status(400).json({ error: 'Invalid email address' });
     }
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    const passwordErrors = validatePassword(password);
+    if (passwordErrors.length) {
+      return res.status(400).json({ error: passwordErrors.join(' '), code: 'WEAK_PASSWORD' });
     }
     if (!Object.values(Role).includes(role)) {
       return res.status(400).json({
@@ -346,7 +348,12 @@ async function resetPassword(req, res) {
     const password_hash = await bcrypt.hash(tempPassword, 10);
 
     await prisma.$transaction([
-      prisma.user.update({ where: { id: target.id }, data: { password_hash } }),
+      // A reset also clears any account lock, so the user can log in
+      // with the new password right away
+      prisma.user.update({
+        where: { id: target.id },
+        data: { password_hash, failed_login_attempts: 0, locked_until: null },
+      }),
       prisma.refreshToken.deleteMany({ where: { user_id: target.id } }),
     ]);
 

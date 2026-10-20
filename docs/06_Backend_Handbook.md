@@ -30,8 +30,9 @@ These are the field names agreed with the AI service.
 - Body: `{ "email": "...", "password": "..." }`
 - 200: `{ "access_token": "...", "refresh_token": "..." }`
 - 400: email or password missing
-- 401: invalid email or password (same message for both cases)
+- 401: invalid email or password (same message for both cases, `code: "INVALID_CREDENTIALS"`)
 - 403: account deactivated (`code: "ACCOUNT_DEACTIVATED"`), returned only after the correct password
+- 423: account locked after 5 failed attempts (`code: "ACCOUNT_LOCKED"`, with `locked_until`), returned even when the password is correct
 
 **POST /auth/refresh**
 - Body: `{ "refresh_token": "..." }`
@@ -51,9 +52,9 @@ These are the field names agreed with the AI service.
 
 **POST /admin/users** (Admin only)
 - Body: `{ "email", "password", "role", "department_id" }`
-- Rules: valid email, password of at least 8 characters, `role` must be one of the four roles, and `department_id` must belong to the admin's own organization.
+- Rules: valid email, password meeting the password policy below, `role` must be one of the four roles, and `department_id` must belong to the admin's own organization.
 - 201: `{ "user": { id, email, role, department_id } }` (the password hash is never returned)
-- 400: invalid or missing fields
+- 400: invalid or missing fields, or weak password (`code: "WEAK_PASSWORD"`)
 - 401: no or invalid token
 - 403: caller is not an Admin
 - 404: department not found (also returned when it belongs to another organization)
@@ -71,7 +72,7 @@ All four routes only act on users inside the admin's own organization. A user in
 - 409: email already in use
 
 **POST /admin/users/:id/reset-password**
-- 200: `{ "temp_password", "message" }`. The password is random (`crypto.randomBytes`). All of the user's refresh tokens are deleted, so they are logged out everywhere.
+- 200: `{ "temp_password", "message" }`. The password is random (`crypto.randomBytes`). All of the user's refresh tokens are deleted, so they are logged out everywhere. Any account lock is cleared, so the user can log in with the new password right away.
 - 404: user not found
 
 **PATCH /admin/users/:id/deactivate**
@@ -157,6 +158,23 @@ All routes need an access token and the Admin or Manager role, except the callba
 - The OAuth callback is the only route without a login token. Its identity comes from the signed `state`.
 - Imports go through the same `ingestDocument` helper as normal uploads. The same `allowed_roles` list is saved in Postgres and sent to the AI service for the Qdrant chunks.
 - In Google's Testing mode, a refresh token expires after 7 days. The app then returns `GOOGLE_RECONNECT_REQUIRED`.
+
+## Password policy and account lockout
+
+### Password policy
+Every new password (organization signup, admin creating a user, admin password reset) must:
+- be at least 8 characters and at most 72 UTF-8 bytes (the bcrypt limit),
+- contain an uppercase letter, a lowercase letter and a number,
+- not be one of the common passwords in `src/utils/passwordPolicy.js`.
+
+A rejected password answers 400 with `code: "WEAK_PASSWORD"` and all failed rules joined in `error`. The policy is only checked when a password is set, so existing users can always log in with their current password.
+
+### Account lockout
+- Every failed login increments `User.failed_login_attempts`.
+- On the 5th failed attempt the account is locked for 15 minutes (`User.locked_until`).
+- A locked account answers 423 with `code: "ACCOUNT_LOCKED"`, even when the password is correct.
+- A successful login resets the counter, and an admin password reset clears the lock immediately.
+- Unlike rate limiting, the counters live in Postgres, so they survive server restarts.
 
 ## Rate limiting
 

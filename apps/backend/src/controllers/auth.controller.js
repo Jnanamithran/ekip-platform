@@ -37,6 +37,11 @@ async function createRefreshToken(userId) {
   return token;
 }
 
+// Account lockout: after this many failed attempts the account is locked...
+const MAX_FAILED_ATTEMPTS = 5;
+// ... for this long (15 minutes)
+const LOCKOUT_MS = 15 * 60 * 1000;
+
 async function login(req, res) {
   try {
     const { email, password } = req.body || {};
@@ -45,22 +50,52 @@ async function login(req, res) {
     }
 
     const user = await prisma.user.findUnique({
-       where: { email: email.toLowerCase() },
+      where: { email: email.toLowerCase() },
       include: withOrg,
     });
 
-    const ok = user && (await bcrypt.compare(password, user.password_hash));
-    if (!ok) {
-      const ok = user && (await bcrypt.compare(password, user.password_hash));
-      return res.status(401).json({ error: 'Invalid email or password' });
+    // Unknown email and wrong password answer the same way
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
     }
- // Deactivated accounts cannot log in
+
+    // Locked accounts cannot log in, even with the correct password
+    if (user.locked_until && user.locked_until > new Date()) {
+      return res.status(423).json({
+        error: 'Account locked due to too many failed attempts. Try again later.',
+        code: 'ACCOUNT_LOCKED',
+        locked_until: user.locked_until,
+      });
+    }
+
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) {
+      // Count the failure; the 5th one locks the account for 15 minutes
+      const failed_login_attempts = user.failed_login_attempts + 1;
+      const data = { failed_login_attempts };
+      if (failed_login_attempts >= MAX_FAILED_ATTEMPTS) {
+        data.locked_until = new Date(Date.now() + LOCKOUT_MS);
+      }
+      await prisma.user.update({ where: { id: user.id }, data });
+      return res.status(401).json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
+    }
+
+    // Deactivated accounts cannot log in
     if (!user.active) {
       return res.status(403).json({
         error: 'Account deactivated. Contact your administrator.',
         code: 'ACCOUNT_DEACTIVATED',
       });
     }
+
+    // Successful login — clear any leftover counter or expired lock
+    if (user.failed_login_attempts !== 0 || user.locked_until !== null) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { failed_login_attempts: 0, locked_until: null },
+      });
+    }
+
     res.json({
       access_token: buildAccessToken(user),
       refresh_token: await createRefreshToken(user.id),

@@ -45,6 +45,8 @@ model User {
   password_hash String
   role          Role
   active        Boolean    @default(true)
+  failed_login_attempts Int      @default(0)
+  locked_until          DateTime?
   department    Department @relation(fields: [department_id], references: [id])
   documents     Document[]
   refresh_tokens RefreshToken[]
