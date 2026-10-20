@@ -291,6 +291,12 @@ export async function deleteDocument(id) {
         method: 'DELETE',
     });
 }
+
+export async function reindexDocument(id) {
+    return apiFetch('/ai/documents/' + encodeURIComponent(id) + '/reindex', {
+        method: 'POST',
+    });
+}
 // ---------------------------------------------------------------------------
 // Admin: analytics
 // ---------------------------------------------------------------------------
