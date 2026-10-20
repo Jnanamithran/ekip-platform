@@ -19,6 +19,11 @@ export const NAV_ITEMS = [
     roles: ["Admin"],
   },
   {
+    label: "Integrations",
+    path: "/app/integrations",
+    roles: ["Admin", "Manager"],
+  },
+  {
     label: "Workspace Settings",
     path: "/app/settings",
     roles: ["Admin"],

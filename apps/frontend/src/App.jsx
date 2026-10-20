@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
 import { navForRole } from "./lib/nav";
 import DashboardLayout from "./layouts/DashboardLayout";
@@ -8,6 +8,7 @@ import Search from "./pages/Search";
 import Upload from "./pages/Upload";
 import ManageUsers from "./pages/ManageUsers";
 import WorkspaceSettings from "./pages/WorkspaceSettings";
+import Integrations from "./pages/Integrations";
 
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
@@ -19,6 +20,13 @@ function RequireRole({ path, children }) {
   const { user } = useAuth();
   const allowed = navForRole(user.role).some((item) => item.path === path);
   return allowed ? children : <Navigate to="/app/search" replace />;
+}
+
+// Google OAuth lands the browser on /integrations?connected=google, but the
+// real page lives at /app/integrations — forward it with params intact.
+function IntegrationsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/app/integrations${search}`} replace />;
 }
 
 function AppRoutes() {
@@ -60,7 +68,18 @@ function AppRoutes() {
             </RequireRole>
           }
         />
+        <Route
+          path="integrations"
+          element={
+            <RequireRole path="/app/integrations">
+              <Integrations />
+            </RequireRole>
+          }
+        />
       </Route>
+      {/* The Google OAuth callback redirects to /integrations (top level) —
+          forward it into the app while preserving the query params. */}
+      <Route path="/integrations" element={<IntegrationsRedirect />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );
