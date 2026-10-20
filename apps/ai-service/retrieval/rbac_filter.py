@@ -13,7 +13,7 @@ of sync on what "authorized" means.
 """
 
 from typing import List, Dict, Any
-from qdrant_client.models import Filter, FieldCondition, MatchAny
+from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
 from embeddings.qdrant_client import get_client, COLLECTION_NAME
 from .schema import RBACContext

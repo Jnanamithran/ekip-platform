@@ -27,6 +27,12 @@ router.post('/ingest', upload.single('file'), aiController.ingest);
 router.post('/documents/:id/progress', aiController.updateDocumentProgress);
 router.get('/documents/:id/preview', aiController.previewDocument);
 
+// Rendered page image for a visual citation preview (scanned PDFs, page is 1-based)
+router.get(
+  '/documents/:id/page-image/:page_num',
+  aiController.getDocumentPageImage
+);
+
 // List documents available to the authenticated user
 router.get('/documents', aiController.listDocuments);
 

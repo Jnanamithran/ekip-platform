@@ -9,6 +9,13 @@ Questions are answered from documents the signed-in user is allowed to access.
 The normal question-answering flow does not use public web search or a hosted
 LLM API.
 
+> **Current state:** this is a working prototype with known defects. Three
+> verified issues affect the search path - see
+> [Known issues](#known-issues) before you rely on it. The project status
+> report is [`PROJECT_PROGRESS.md`](./PROJECT_PROGRESS.md), and the AI
+> pipeline is documented in
+> [`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md).
+
 ## Contents
 
 - [What EKIP does](#what-ekip-does)
@@ -17,7 +24,9 @@ LLM API.
 - [Create an account and use EKIP](#create-an-account-and-use-ekip)
 - [Run services locally](#run-services-locally)
 - [Configuration and ports](#configuration-and-ports)
+- [Google Drive integration](#google-drive-integration)
 - [Development and validation](#development-and-validation)
+- [Known issues](#known-issues)
 - [Troubleshooting](#troubleshooting)
 - [Project layout](#project-layout)
 
@@ -62,12 +71,20 @@ fixed at the bottom of the Search view.
 
 | Format | Current extraction support |
 | --- | --- |
-| PDF | Text-based PDFs; OCR for scanned/image-only PDFs is not included |
+| PDF | Text-based PDFs; scanned/image-only pages fall back to EasyOCR before ColPali routing |
 | DOCX | Word paragraphs and tables |
 | XLSX | Spreadsheet content |
 | TXT | Plain text |
 
 PPTX and CSV are not currently supported.
+
+### Google Drive import
+
+The backend can connect a Google Drive account, list PDF/DOCX/XLSX/TXT files,
+and import them into a workspace with a per-file role list. There is no
+frontend for this yet - it is currently API-only. See
+[Google Drive integration](#google-drive-integration).
+
 
 ## Architecture and data
 
@@ -84,13 +101,21 @@ Browser
 | Service | Responsibility | Host port |
 | --- | --- | ---: |
 | Frontend | React application and UI | 5173 |
-| Backend | Authentication, workspace administration, document APIs, AI proxy | 5000 |
+| Backend | Authentication, workspace administration, document APIs, AI proxy, Google Drive | 5000 |
 | PostgreSQL | Accounts, workspace records, document metadata, answer history | 5432 |
 | AI service | Ingestion, retrieval, reranking, generation, citations | 8000 |
+| Visual AI service | ColPali page embedding, Qwen2-VL visual QA (`ai` profile, GPU) | 8001 |
 | Qdrant | Document chunks and vector search | 6333 |
 | Ollama | Local language model runtime | 11434 |
 
-The AI service, Qdrant, and Ollama are in the Compose `ai` profile. The
+The visual AI service lives in `apps/ai-service-visual` and is part of the
+Compose `ai` profile with its own Dockerfile. It reserves one NVIDIA GPU and
+runs when the `ai` profile is enabled; scanned PDFs are forwarded to it
+automatically during ingestion. See
+[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md).
+
+The AI service, the visual AI service, Qdrant, and Ollama are in the Compose
+`ai` profile. The
 backend validates JWTs and supplies organization, workspace, department, and
 role context to protected operations. Retrieval applies these access fields
 before returning passages.
@@ -190,6 +215,14 @@ After signup, upload documents before asking questions about their content.
 Only Admin users can open Workspace Settings and Manage Users. Workspace
 member, department, and document counts come from PostgreSQL.
 
+The Manage Users page is currently a **read-only list**. The backend supports
+creating, editing, deactivating, reactivating users and resetting passwords,
+but those controls are not exposed in the UI yet.
+
+Uploads currently set the document's role list to the uploader's own role.
+Per-document multi-role access is only reachable through the Google Drive
+import API.
+
 ## Run services locally
 
 This development setup runs PostgreSQL, Qdrant, and Ollama in Docker while
@@ -271,6 +304,14 @@ npm run dev
 Open <http://localhost:5173>. Port 5173 is the frontend port both locally and
 in Docker Compose. The browser calls the backend on port 5000.
 
+### Optional: the visual AI service
+
+The visual service is not needed for the text pipeline. It starts with the
+rest of the `ai` profile (`docker compose --profile ai up`) and reserves an
+NVIDIA GPU, so it requires the NVIDIA Container Toolkit on the host. For
+manual setup and VRAM notes, see
+[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#running-the-services).
+
 ### Host and container addresses
 
 Within the Compose network, use service names:
@@ -280,6 +321,7 @@ Within the Compose network, use service names:
 - AI service → Qdrant: `qdrant:6333`
 - AI service → Ollama: `ollama:11434`
 - AI service → backend progress API: `backend:5000`
+- AI service → visual AI service: `ai-service-visual:8001`
 
 On Windows, local processes use `localhost`/`127.0.0.1` and the published host
 ports. The browser's `VITE_API_URL` must point to the host backend, not the
@@ -300,6 +342,64 @@ Compose-only service name.
 | `VITE_API_URL` | Frontend build/dev server | Backend URL used by the browser |
 
 Do not publish secrets in source code, issue reports, or screenshots.
+
+The AI service also reads `VISUAL_SERVICE_URL` (default
+`http://ai-service-visual:8001`) to forward scanned PDFs and run visual
+queries, and `VISUAL_INGEST_TIMEOUT` (default 120 s) for that forward call.
+The visual service reads `COLPALI_MODEL`, `QWEN_MODEL`, `RENDER_DPI` and
+`VISUAL_STORAGE`.
+
+## Google Drive integration
+
+The backend can import documents from a connected Google Drive account. This
+is **API-only at present** - there is no `/integrations` page in the frontend
+yet, so the flow must be driven with an HTTP client or `curl`.
+
+All routes require an access token and the `Admin` or `Manager` role, except
+the OAuth callback.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/integrations/google/connect` | Returns the Google sign-in URL to open |
+| `GET` | `/integrations/google/callback` | Google redirects here; exchanges the code |
+| `GET` | `/integrations/google/status` | `{ "connected": true \| false }` |
+| `GET` | `/integrations/google/files` | Lists PDF/DOCX/XLSX/TXT files, not trashed |
+| `POST` | `/integrations/google/import` | Imports 1-5 files with per-file role lists |
+| `DELETE` | `/integrations/google/disconnect` | Deletes the stored connection |
+
+The import body is `{ "files": [{ "file_id", "allowed_roles": ["Admin", "Manager"] }] }`.
+`allowed_roles` must be a non-empty list of valid roles and must include the
+importer's own role. File names and types come from Drive, never from the
+request body. Files over 50 MB are skipped, and one file failing does not fail
+the others.
+
+Drive's own permissions are ignored - EKIP's RBAC applies. Imported files go
+through the same ingestion path as a normal upload, and the same role list is
+saved in Postgres and sent to the AI service for the Qdrant chunks.
+
+### Setup
+
+1. Create an OAuth client in Google Cloud Console (Web application, redirect URI
+   `http://localhost:5000/integrations/google/callback`) and add testers on the
+   consent screen.
+2. Add these to `apps/backend/.env` (and to the Compose `backend` service
+   environment, which does not set them for you):
+
+```dotenv
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://localhost:5000/integrations/google/callback
+TOKEN_ENCRYPTION_KEY=64-hex-characters
+OAUTH_STATE_SECRET=64-hex-characters
+```
+
+Generate the two secrets with
+`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+
+Google tokens are encrypted at rest with AES-256-GCM using
+`TOKEN_ENCRYPTION_KEY`. In Google's Testing mode a refresh token expires after
+7 days; the API then returns `GOOGLE_RECONNECT_REQUIRED`.
+
 
 ## Development and validation
 
@@ -336,6 +436,11 @@ Set-Location apps/ai-service
 python -m pytest tests -q
 ```
 
+The current result is **13 passed offline; 4 modules require the running
+stack**. `test_citations.py`, `test_generation.py`, `test_hybrid.py` and
+`test_reranker.py` call Qdrant at module import time and need the Compose `ai`
+profile stack running - see [Known issues](#known-issues).
+
 Useful Compose commands from the repository root:
 
 ```powershell
@@ -345,6 +450,42 @@ docker compose logs --tail 100 ai-service
 docker compose logs --tail 100 frontend
 docker compose down
 ```
+
+## Known issues
+
+The AI-service blockers found during the documentation audit have been
+resolved: the missing `MatchValue` import (PR #97), the four test modules that
+broke pytest collection (PR #98), the `/ask` 500 on a missing visual
+collection (now returns "no visual documents"), and the unwired visual
+pipeline (scanned PDFs are now forwarded to the visual service during
+ingestion). Full detail is in
+[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#known-issues-and-blockers).
+
+### 1. `tests/demo.py` still uses the old `RBACContext` shape
+
+It is not collected by pytest, but running it directly raises a pydantic
+`ValidationError` because `allowed_roles` is missing.
+
+### 2. Four AI-service test modules need the running stack
+
+`test_citations.py`, `test_generation.py`, `test_hybrid.py` and
+`test_reranker.py` call Qdrant at module import time, so they fail with
+connection errors unless the Compose `ai` profile stack is up.
+
+### 3. Large scanned PDFs can outlive the visual-ingest timeout
+
+The forward call to `/visual/ingest` uses `VISUAL_INGEST_TIMEOUT` (default
+120 s). A timeout is non-fatal - the document is still text-indexed - but it
+skips visual indexing for that document; raise the timeout for large scans.
+
+### 4. Frontend gaps
+
+- No Google Drive page - the backend integration is unreachable from the UI.
+- Manage Users is read-only; create/edit/deactivate/reset-password have no
+  UI.
+- No multi-role control on upload; every uploaded document is visible only to
+  the uploader's role.
+
 
 ## Troubleshooting
 
@@ -381,6 +522,18 @@ docker compose exec ollama ollama list
 If the model is missing, run `docker compose exec ollama ollama pull
 llama3.2:3b`.
 
+### Search fails with a 500
+
+Check the AI service log first. The two defects that used to cause 500s on
+the search path (the missing `MatchValue` import and the missing visual
+collection) are fixed; remaining causes are usually Ollama or Qdrant being
+down. A failed visual ingest is logged in the AI service but never fails the
+request.
+
+```powershell
+docker compose logs --tail 100 ai-service
+```
+
 ### A PDF citation cannot be previewed
 
 Preview requires a retained original PDF. Older indexed documents may have
@@ -406,10 +559,12 @@ want a full local reset.
 ```text
 ekip-platform/
 ├── apps/
-│   ├── frontend/        # React, Vite, Tailwind
-│   ├── backend/         # Express API, JWT auth, Prisma schema/migrations
-│   └── ai-service/      # FastAPI, ingestion, retrieval, citations, generation
-├── docs/                # Deployment and project documentation
-├── docker-compose.yml   # Local service stack and persistent volumes
+│   ├── frontend/          # React, Vite, Tailwind
+│   ├── backend/           # Express API, JWT auth, Prisma schema/migrations
+│   ├── ai-service/        # FastAPI, ingestion, retrieval, citations, generation
+│   └── ai-service-visual/ # FastAPI, ColPali + Qwen2-VL (Compose `ai` profile, GPU)
+├── docs/                  # Deployment and project documentation
+├── docker-compose.yml     # Local service stack and persistent volumes
+├── PROJECT_PROGRESS.md    # Current project status
 └── README.md
 ```
