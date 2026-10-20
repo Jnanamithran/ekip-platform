@@ -23,10 +23,10 @@ function makeLimiter({ windowMs, limit, message, keyGenerator, skipSuccessfulReq
   });
 }
 
-// Login, part 1: a loose limit per IP. Only failed logins count.
+// Login, part 1: limit failed attempts per IP, including for Admin accounts.
 const loginIpLimiter = makeLimiter({
   windowMs: 15 * 60 * 1000,
-  limit: envInt('RATE_LIMIT_LOGIN_IP_MAX', 30),
+  limit: envInt('RATE_LIMIT_LOGIN_IP_MAX', 5),
   skipSuccessfulRequests: true,
   message: 'Too many login attempts from this network. Try again in 15 minutes.',
 });
