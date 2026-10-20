@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { deleteDocument, getDocuments, uploadDocument } from "../lib/apiClient";
+import { deleteDocument, getDocuments, reindexDocument, uploadDocument } from "../lib/apiClient";
+import { useAuth } from "../lib/AuthContext";
 import PdfPreview from "../components/documents/PdfPreview";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
+
 export default function Upload() {
+  const { user } = useAuth();
+  const canReindex = user?.role === "Admin" || user?.role === "Manager";
   const fileInput = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [uploads, setUploads] = useState([]);
@@ -12,6 +16,8 @@ export default function Upload() {
   const [loadError, setLoadError] = useState("");
   const [deletingIds, setDeletingIds] = useState([]);
   const [deleteError, setDeleteError] = useState("");
+  const [reindexingIds, setReindexingIds] = useState([]);
+  const [reindexError, setReindexError] = useState("");
   const [preview, setPreview] = useState(null);
 
   useEffect(() => {
@@ -65,6 +71,69 @@ export default function Upload() {
       setDeleteError(`Could not delete ${document.filename}: ${err.message}`);
     } finally {
       setDeletingIds((current) => current.filter((id) => id !== document.id));
+    }
+  }
+
+  async function handleReindex(document) {
+    if (!window.confirm(
+      `Re-index "${document.filename}"? This will delete its indexed content and re-process the original file.`
+    )) {
+      return;
+    }
+
+    setReindexingIds((current) => [...current, document.id]);
+    setReindexError("");
+    // Optimistic progress UI — the 5s refreshDocuments poll picks up real
+    // backend progress/stage while the (long-running) request is in flight.
+    setUploads((current) =>
+      current.map((item) =>
+        item.id === document.id
+          ? { ...item, processing: true, status: "Re-indexing...", progress: 5 }
+          : item
+      )
+    );
+    try {
+      await reindexDocument(document.id);
+      // Backend resolves only after processing completes — refetch so the row
+      // shows the fresh status/chunk count instead of waiting for next poll.
+      try {
+        const result = await getDocuments();
+        setUploads(result.documents.map((doc) => ({
+          id: doc.id,
+          filename: doc.filename,
+          fileType: doc.file_type,
+          previewAvailable: doc.preview_available,
+          processing: doc.status === "Processing",
+          status: doc.status === "Processing"
+            ? doc.stage || "Processing..."
+            : doc.status === "Failed" || doc.status === "Timed out"
+              ? `${doc.status}: ${doc.stage}`
+              : doc.status === "Indexed"
+                ? `Indexed (${doc.chunk_count} chunks)`
+                : doc.status,
+          progress: doc.progress,
+        })));
+      } catch {
+        // Poll will pick it up on next tick; just clear the optimistic state.
+        setUploads((current) =>
+          current.map((item) =>
+            item.id === document.id
+              ? { ...item, processing: false, status: "Indexed", progress: 100 }
+              : item
+          )
+        );
+      }
+    } catch (err) {
+      setReindexError(`Could not re-index ${document.filename}: ${err.message}`);
+      setUploads((current) =>
+        current.map((item) =>
+          item.id === document.id
+            ? { ...item, processing: false, status: `Re-index failed: ${err.message}` }
+            : item
+        )
+      );
+    } finally {
+      setReindexingIds((current) => current.filter((id) => id !== document.id));
     }
   }
 
@@ -135,6 +204,7 @@ export default function Upload() {
         </p>
         {loadError && <p role="alert" className="mt-2 text-sm text-danger">{loadError}</p>}
         {deleteError && <p role="alert" className="mt-2 text-sm text-danger">{deleteError}</p>}
+        {reindexError && <p role="alert" className="mt-2 text-sm text-danger">{reindexError}</p>}
       </div>
 
       <div
@@ -203,6 +273,26 @@ export default function Upload() {
                   <span className="text-xs text-slate">{upload.status}</span>
                   {upload.processing && Number.isInteger(upload.progress) && (
                     <span className="text-xs text-slate">{upload.progress}%</span>
+                  )}
+                  {canReindex && (
+                    <button
+                      type="button"
+                      aria-label={`Re-index ${upload.filename}`}
+                      title={
+                        upload.processing || upload.status.startsWith("Uploading")
+                          ? "Wait for upload and processing to finish"
+                          : "Delete indexed content and re-process the original file"
+                      }
+                      onClick={() => handleReindex(upload)}
+                      disabled={
+                        upload.processing ||
+                        upload.status.startsWith("Uploading") ||
+                        reindexingIds.includes(upload.id)
+                      }
+                      className="text-xs font-medium text-purple-600 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {reindexingIds.includes(upload.id) ? "Re-indexing..." : "Re-index"}
+                    </button>
                   )}
                   <button
                     type="button"
