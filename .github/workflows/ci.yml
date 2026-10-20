@@ -45,10 +45,11 @@ jobs:
         # test_generation.py, test_hybrid.py, test_reranker.py, demo.py) that
         # require live Qdrant/Ollama and break pytest collection, so a bare
         # `pytest tests/` (or `-m "not integration and not e2e"`, which no
-        # test uses) would fail in CI.
+        # test uses) would fail in CI. New unit test files must be added to
+        # this list when they land (see test/ai-unit-coverage).
         run: |
           cd apps/ai-service
-          pytest tests/test_ask_endpoint.py tests/test_citation_extractor.py tests/test_ingest_endpoint.py tests/test_pdf_parser_ocr.py tests/test_ingestion.py tests/test_chunking.py tests/test_retrieval.py -v \
+          pytest tests/test_ask_endpoint.py tests/test_citation_extractor.py tests/test_ingest_endpoint.py tests/test_pdf_parser_ocr.py -v \
             --tb=short
 
   backend-lint:
