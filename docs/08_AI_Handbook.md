@@ -16,10 +16,11 @@ Stack: Python 3.11, FastAPI, Sentence Transformers, Qdrant, `rank-bm25`, Ollama.
 | `apps/ai-service` | 8000 | Ingestion, chunking, embeddings, hybrid retrieval, reranking, generation, citations |
 | `apps/ai-service-visual` | 8001 | ColPali page embedding and Qwen2-VL visual question answering |
 
-The text service calls the visual service over HTTP. The visual service is
-**not** in `docker-compose.yml` and has **no Dockerfile**, so in the current
-Compose stack only the text pipeline runs. See
-[Known issues and blockers](#known-issues-and-blockers).
+The text service calls the visual service over HTTP (`VISUAL_SERVICE_URL`).
+Both services are in `docker-compose.yml` under the `ai` profile: the visual
+service has its own Dockerfile, reserves one NVIDIA GPU, and shares the
+`document_uploads` volume with the backend so the rendered page images can be
+streamed back by the backend's page-image endpoint.
 
 ---
 
@@ -52,7 +53,9 @@ Browser
             │  injects RBAC from the verified JWT
             └── FastAPI AI ─────── http://localhost:8000
                  ├── Qdrant ────── chunk vectors and RBAC payload
-                 └── Ollama ────── local llama3.2:3b
+                 ├── Ollama ────── local llama3.2:3b
+                 └── Visual AI ─── http://ai-service-visual:8001
+                      └── Qdrant ── page vectors (ekip_visual_documents)
 ```
 
 On `/ask` the AI service first calls `has_visual_docs()`, a metadata-only scroll
@@ -60,7 +63,9 @@ over the visual collection with the caller's RBAC filter. If any accessible
 visual page exists, the text and visual pipelines run in parallel via
 `asyncio.gather` and their citations are merged; the answer comes from
 whichever pipeline produced more citations. Otherwise only the text pipeline
-runs.
+runs. When the visual collection does not exist yet (no scanned document has
+ever been ingested), `has_visual_docs()` treats that as "no visual documents"
+and returns `False`.
 
 ---
 
@@ -181,8 +186,8 @@ Same RBAC payload indexes, plus per-page fields `image_path` and `pipeline`
 `VISUAL_STORAGE` (default `uploads/visual`) as `<document_id>_page<N>.jpg`.
 
 > **The text service never creates `ekip_visual_documents`.** Only the visual
-> service does, and the visual service is not part of the Compose stack. See
-> [Known issues and blockers](#known-issues-and-blockers).
+> service does, on the first scanned-PDF ingest. Until then the collection does
+> not exist, and `has_visual_docs()` treats that as "no visual documents".
 
 ---
 
@@ -319,8 +324,15 @@ Each `Chunk` carries `chunk_id` (UUID), `document_id`, `filename`, `file_type`,
 - 422: invalid RBAC metadata or document id
 - 500: parsing, chunking, or embedding failure
 
+When the parser flags a PDF `is_scanned_or_empty`, the service also forwards
+the file (multipart: `rbac` JSON string, `document_id`, `file`) to the visual
+service's `POST /visual/ingest` for ColPali page indexing. The call is awaited
+(timeout `VISUAL_INGEST_TIMEOUT`, default 120 s) and is **non-fatal**: if the
+visual service is unreachable or returns an error, the failure is logged and
+the text pipeline still completes.
+
 Progress is reported back to the backend during ingestion at 10%, 20%, 35%,
-45%, 60%, 70% and 90%.
+40% (visual routing, scanned PDFs only), 45%, 60%, 70% and 90%.
 
 ### Visual service (`apps/ai-service-visual`, port 8001)
 
@@ -342,6 +354,20 @@ Progress is reported back to the backend during ingestion at 10%, 20%, 35%,
 
 **DELETE /visual/document/{document_id}**
 - 200: `{ "message", "document_id", "deleted" }`
+
+### Page-image preview (Express backend, port 5000)
+
+**GET /ai/documents/:id/page-image/:page_num** (JWT required)
+- Streams the JPEG that the visual pipeline rendered for page `page_num`
+  (1-based) of document `id`. Images are written by the visual service to the
+  shared `document_uploads` volume at `uploads/visual/{id}_page{N}.jpg`.
+- Access is checked against the `Document` row (`department_id` +
+  `allowed_roles`), the same guard as `/ai/documents/:id/preview`.
+- 200: `image/jpeg`
+- 400: invalid document id or page number
+- 404: document not accessible, or no rendered image exists (the document was
+  not processed by the visual pipeline)
+- Used by the frontend to show the cited page next to visual answers.
 
 ### Progress reporting
 
@@ -368,6 +394,8 @@ Copy `apps/ai-service/.env.example` to `apps/ai-service/.env` and adjust:
 QDRANT_URL=http://localhost:6333
 OLLAMA_URL=http://localhost:11434
 BACKEND_URL=http://localhost:5000
+VISUAL_SERVICE_URL=http://localhost:8001
+VISUAL_INGEST_TIMEOUT=120
 COLPALI_MODEL=vidore/colpali-v1.2
 QWEN_MODEL=Qwen/Qwen2-VL-7B-Instruct
 ```
@@ -377,15 +405,18 @@ QWEN_MODEL=Qwen/Qwen2-VL-7B-Instruct
 | `QDRANT_URL` | `http://localhost:6333` | Text service, visual service |
 | `OLLAMA_URL` | `http://localhost:11434` | Text service |
 | `BACKEND_URL` | `http://localhost:5000` | Text service (progress reporting) |
-| `VISUAL_SERVICE_URL` | `http://ai-service-visual:8001` | Text service (visual ask) |
+| `VISUAL_SERVICE_URL` | `http://ai-service-visual:8001` | Text service (visual ingest forwarding and visual ask) |
+| `VISUAL_INGEST_TIMEOUT` | `120` | Text service (seconds to wait for `/visual/ingest`) |
 | `VISUAL_STORAGE` | `uploads/visual` | Visual service (page images) |
 | `COLPALI_MODEL` | `vidore/colpali-v1.2` | Visual service |
 | `QWEN_MODEL` | `Qwen/Qwen2-VL-7B-Instruct` | Visual service |
 | `RENDER_DPI` | `150` | Visual service |
 
 Inside Docker Compose the text service is configured with
-`QDRANT_URL=http://qdrant:6333`, `OLLAMA_URL=http://ollama:11434` and
-`BACKEND_URL=http://backend:5000`.
+`QDRANT_URL=http://qdrant:6333`, `OLLAMA_URL=http://ollama:11434`,
+`BACKEND_URL=http://backend:5000` and
+`VISUAL_SERVICE_URL=http://ai-service-visual:8001`; the visual service gets
+`QDRANT_URL=http://qdrant:6333`.
 
 ---
 
@@ -401,10 +432,23 @@ pip install -r requirements.txt
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Visual service
+### Visual service (GPU recommended)
 
-The visual service has **no Dockerfile** and is not in `docker-compose.yml`, so
-it must be run manually:
+The visual service has a Dockerfile (`apps/ai-service-visual/Dockerfile`) and
+is part of the Compose stack under the `ai` profile. It reserves one NVIDIA
+GPU via `deploy.resources.reservations`:
+
+```powershell
+docker compose --profile ai up --build
+```
+
+Host prerequisites for the GPU path: Docker Compose v2, the NVIDIA Container
+Toolkit, and a CUDA 12.1-capable driver. The image installs the CUDA build of
+torch/torchvision separately from `requirements.txt`, because the CUDA index
+is not on PyPI. Without a GPU the service still starts and ColPali falls back
+to CPU, but visual ingestion is very slow.
+
+For local development without Docker:
 
 ```powershell
 Set-Location apps/ai-service-visual
@@ -437,122 +481,38 @@ python -m pytest tests -q
 The suite covers the ingest and ask endpoints, the PDF parser and its OCR
 fallback, the citation extractor, hybrid fusion, the reranker, and generation.
 
-**Current status: 13 passed, 4 collection errors.** The four failing modules
-are `test_citations.py`, `test_generation.py`, `test_hybrid.py` and
-`test_reranker.py`. See
-[Known issues and blockers](#known-issues-and-blockers).
+**Current status: 13 passed offline; 4 modules require the running stack.**
+`test_ask_endpoint.py`, `test_citation_extractor.py`, `test_ingest_endpoint.py`
+and `test_pdf_parser_ocr.py` run without any services (13 tests pass).
+`test_citations.py`, `test_generation.py`, `test_hybrid.py` and
+`test_reranker.py` are integration-style modules that call Qdrant at module
+import time; they pass once the Compose `ai` profile stack is up, and fail
+with Qdrant connection errors otherwise.
 
 ---
 
 ## Known issues and blockers
 
-All three items below were reproduced against the current `main` branch
-(`f4c217b`). The first two are code defects; the third is a wiring gap.
+The blockers found during the documentation audit have been resolved:
 
-### 1. `MatchValue` is not imported - the BM25 path of every `/ask` fails
+| Issue | Status |
+|---|---|
+| `MatchValue` not imported in `retrieval/rbac_filter.py` — broke the BM25 half of every `/ask` | Fixed (PR #97) |
+| Four test modules built `RBACContext(...)` without `allowed_roles`, breaking pytest collection | Fixed (PR #98) |
+| `has_visual_docs()` raised `UnexpectedResponse: 404` on every `/ask` until the first scanned document existed | Now handled: a missing visual collection returns `False` |
+| `POST /visual/ingest` had no caller; the visual service had no Dockerfile and no Compose entry | Wired up: `/ingest` forwards scanned PDFs and the service runs in the `ai` profile |
 
-**File:** `apps/ai-service/retrieval/rbac_filter.py`
+### Current known issues
 
-The module imports `Filter, FieldCondition, MatchAny` but calls `MatchValue`
-three times, on the `org_id`, `workspace_id` and `department_id` conditions.
-`MatchValue` is never imported.
-
-```python
-from qdrant_client.models import Filter, FieldCondition, MatchAny   # MatchValue missing
-...
-FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),   # NameError here
-```
-
-Reproduced:
-
-```text
->>> fetch_authorized_chunks(rbac)
-NameError: name 'MatchValue' is not defined
-```
-
-Introduced by commit `9140d53` (PR #90), which replaced `MatchValue` with
-`MatchAny` on the `allowed_roles` condition and dropped the import while
-leaving the other three `MatchValue` calls in place.
-
-**Impact:** `sparse_retrieve()` calls `fetch_authorized_chunks()`, and
-`hybrid_retrieve()` calls `sparse_retrieve()`. Every `/ask` request therefore
-fails in the sparse half of hybrid retrieval, even though the dense half is
-correct. Note that `retrieval/service.py` imports `MatchValue` correctly - the
-defect is confined to `rbac_filter.py`.
-
-**Fix:** add `MatchValue` to the import in `rbac_filter.py`.
-
-### 2. Four test modules fail at collection
-
-`test_citations.py`, `test_generation.py`, `test_hybrid.py` and
-`test_reranker.py` each construct `RBACContext(...)` at module import time
-without the now-required `allowed_roles` field, so pytest aborts with a
-pydantic `ValidationError` before any test runs:
-
-```text
-E   pydantic_core._pydantic_core.ValidationError: 1 validation error for RBACContext
-E   allowed_roles
-E     Field required
-```
-
-**Fix:** add `allowed_roles=[...]` to each `RBACContext(...)` and move the
-construction inside a fixture.
-
-### 3. The visual collection is never created, so `has_visual_docs()` raises
-
-**File:** `apps/ai-service/main.py`
-
-`has_visual_docs()` scrolls the collection `ekip_visual_documents` on **every**
-`/ask` request. That collection is only ever created by the visual service
-(`ensure_visual_collection()`), and the visual service is not part of the
-Compose stack - so in a stock stack the collection does not exist.
-
-Qdrant answers a scroll on a missing collection with HTTP 404, and
-`qdrant-client` 1.9.1 turns that into `UnexpectedResponse`. Nothing in
-`has_visual_docs()` catches it, so the exception propagates out of the `/ask`
-handler:
-
-```text
-qdrant_client.http.exceptions.UnexpectedResponse: 404 (Not Found)
-Raw response content: b'{"status": {"error": "Not found: Collection ekip_visual_documents doesn\'t exist!"}}'
-```
-
-Reproduced end to end against a stub Qdrant that exposes only
-`ekip_documents`:
-
-```text
-POST /ask  ->  500 Internal Server Error
-```
-
-**Impact:** in a stock stack `/ask` fails before retrieval even begins. This
-is masked in the test suite because `test_ask_endpoint.py` monkeypatches
-`has_visual_docs` to return `False`, so the real function is never exercised.
-
-**Fix options,** in order of preference:
-
-1. Call `client.collection_exists(VISUAL_COLLECTION)` before scrolling, and
-   return `False` when the collection is absent.
-2. Wrap the scroll in a `try/except` for `UnexpectedResponse` and treat a 404
-   as "no visual documents".
-3. Have the text service create the visual collection on startup, so the
-   collection always exists even when it is empty.
-
-Option 1 is the most explicit. Option 3 also requires the collection's vector
-size (128) to match the visual service's configuration, which couples the two
-services.
-
-### Related gap: visual ingestion has no caller
-
-Even once the 404 is handled, `POST /visual/ingest` on the visual service is
-never called by any code path. The visual service also has no Dockerfile and
-no Compose entry, so the collection stays empty and the visual pipeline never
-runs. Wiring this up means calling `/visual/ingest` from the text service's
-ingestion path when `ingest_document()` returns `is_scanned_or_empty = True`.
-
-### Verification note
-
-A live Qdrant instance was not available in the environment where these
-issues were confirmed. The behaviour above was reproduced against a local
-stub that returns Qdrant's documented 404 response for a missing collection,
-and the `MatchValue` failure was reproduced directly against the real
-`fetch_authorized_chunks()`.
+1. **`tests/demo.py` still uses the old `RBACContext` shape.** It is not
+   collected by pytest, but running it directly raises a pydantic
+   `ValidationError` because `allowed_roles` is missing — the same pattern that
+   PR #98 fixed in the test modules.
+2. **Four test modules need the running stack.** `test_citations.py`,
+   `test_generation.py`, `test_hybrid.py` and `test_reranker.py` call Qdrant at
+   module import time, so they fail with connection errors unless the Compose
+   `ai` profile stack is up.
+3. **Large scanned PDFs can outlive the visual-ingest timeout.** The forward
+   call to `/visual/ingest` uses `VISUAL_INGEST_TIMEOUT` (default 120 s). A
+   timeout is non-fatal — the document is still text-indexed — but it skips
+   visual indexing for that document; raise the timeout for large scans.

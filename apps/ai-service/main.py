@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import uuid
 import asyncio
@@ -16,10 +17,12 @@ from reranking.reranker import rerank
 from generation.generator import generate_answer
 from citations.extractor import extract_citations
 from ingestion.service import ingest_document
+from ingestion.schema import FileType
 from chunking.service import chunk_document
 
 from embeddings.qdrant_client import get_client
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 app = FastAPI(title='EKIP AI Service', version='0.1.0')
 
@@ -127,12 +130,22 @@ def has_visual_docs(rbac_dict: dict) -> bool:
         FieldCondition(key="department_id", match=MatchValue(value=rbac_dict["department_id"])),
         FieldCondition(key="allowed_roles", match=MatchValue(value=rbac_dict["role"])),
     ])
-    result = client.scroll(
-        collection_name=VISUAL_COLLECTION,
-        scroll_filter=rbac_filter,
-        limit=1,
-        with_vectors=False,
-    )
+    try:
+        result = client.scroll(
+            collection_name=VISUAL_COLLECTION,
+            scroll_filter=rbac_filter,
+            limit=1,
+            with_vectors=False,
+        )
+    except UnexpectedResponse as exc:
+        # The collection does not exist until the first scanned document has
+        # been ingested — treat that as "no visual documents yet".
+        if exc.status == 404:
+            return False
+        raise
+    except ValueError:
+        # Older qdrant-client versions raise ValueError for a missing collection.
+        return False
     return len(result[0]) > 0
 
 
@@ -345,6 +358,55 @@ async def ingest(
                 f'Parsed {len(ingest_result.pages)} page(s)',
                 35,
             )
+
+            # --- Step 1b: scanned/image-only PDFs are also visual-indexed ---
+            if (
+                ingest_result.is_scanned_or_empty
+                and ingest_result.file_type == FileType.PDF
+            ):
+                await update_document(
+                    'Routing scanned pages to the visual pipeline (ColPali)',
+                    40,
+                )
+                visual_rbac = {
+                    'org_id':        rbac_info.org_id,
+                    'workspace_id':  rbac_info.workspace_id,
+                    'department_id': rbac_info.department_id,
+                    'role':          rbac_info.role,
+                    'allowed_roles': rbac_info.allowed_roles or [rbac_info.role],
+                    'uploaded_by':   rbac_info.user_id
+                                     or 'user-' + str(uuid.uuid4())[:8],
+                }
+                try:
+                    # The visual service runs in its own container, so the
+                    # temp file_path is not shared — forward the bytes
+                    # as multipart (the /visual/ingest contract is
+                    # rbac + document_id Form fields plus the file upload).
+                    async with httpx.AsyncClient(
+                        timeout=float(os.getenv('VISUAL_INGEST_TIMEOUT', '120')),
+                    ) as visual_client:
+                        visual_response = await visual_client.post(
+                            f'{VISUAL_SERVICE_URL}/visual/ingest',
+                            data={
+                                'rbac':        json.dumps(visual_rbac),
+                                'document_id': document_id,
+                            },
+                            files={
+                                'file': (
+                                    filename,
+                                    file_path.read_bytes(),
+                                    'application/pdf',
+                                ),
+                            },
+                        )
+                        visual_response.raise_for_status()
+                except Exception as exc:
+                    # Non-fatal: text indexing below still proceeds, and the
+                    # document remains searchable through the text pipeline.
+                    print(
+                        f'[ai-service] visual ingest failed for '
+                        f'{document_id}: {exc}'
+                    )
 
             # --- Steps 2-3: chunk + embed + upsert into Qdrant with RBAC ---
             from embeddings.service import embed_and_upsert

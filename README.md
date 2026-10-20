@@ -104,15 +104,18 @@ Browser
 | Backend | Authentication, workspace administration, document APIs, AI proxy, Google Drive | 5000 |
 | PostgreSQL | Accounts, workspace records, document metadata, answer history | 5432 |
 | AI service | Ingestion, retrieval, reranking, generation, citations | 8000 |
+| Visual AI service | ColPali page embedding, Qwen2-VL visual QA (`ai` profile, GPU) | 8001 |
 | Qdrant | Document chunks and vector search | 6333 |
 | Ollama | Local language model runtime | 11434 |
 
-A second FastAPI service, the visual AI service (ColPali + Qwen2-VL), exists
-in `apps/ai-service-visual` and targets port 8001. It is **not** part of the
-Compose stack and has no Dockerfile, so it does not run by default. See
-[Known issues](#known-issues).
+The visual AI service lives in `apps/ai-service-visual` and is part of the
+Compose `ai` profile with its own Dockerfile. It reserves one NVIDIA GPU and
+runs when the `ai` profile is enabled; scanned PDFs are forwarded to it
+automatically during ingestion. See
+[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md).
 
-The AI service, Qdrant, and Ollama are in the Compose `ai` profile. The
+The AI service, the visual AI service, Qdrant, and Ollama are in the Compose
+`ai` profile. The
 backend validates JWTs and supplies organization, workspace, department, and
 role context to protected operations. Retrieval applies these access fields
 before returning passages.
@@ -303,10 +306,11 @@ in Docker Compose. The browser calls the backend on port 5000.
 
 ### Optional: the visual AI service
 
-The visual service is not needed for the text pipeline. To run it, follow
-[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#running-the-services). It
-needs a CUDA-capable GPU for practical use, and it is not reachable from the
-Compose stack.
+The visual service is not needed for the text pipeline. It starts with the
+rest of the `ai` profile (`docker compose --profile ai up`) and reserves an
+NVIDIA GPU, so it requires the NVIDIA Container Toolkit on the host. For
+manual setup and VRAM notes, see
+[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#running-the-services).
 
 ### Host and container addresses
 
@@ -317,6 +321,7 @@ Within the Compose network, use service names:
 - AI service → Qdrant: `qdrant:6333`
 - AI service → Ollama: `ollama:11434`
 - AI service → backend progress API: `backend:5000`
+- AI service → visual AI service: `ai-service-visual:8001`
 
 On Windows, local processes use `localhost`/`127.0.0.1` and the published host
 ports. The browser's `VITE_API_URL` must point to the host backend, not the
@@ -339,8 +344,10 @@ Compose-only service name.
 Do not publish secrets in source code, issue reports, or screenshots.
 
 The AI service also reads `VISUAL_SERVICE_URL` (default
-`http://ai-service-visual:8001`) for the visual pipeline. The visual service
-reads `COLPALI_MODEL`, `QWEN_MODEL`, `RENDER_DPI` and `VISUAL_STORAGE`.
+`http://ai-service-visual:8001`) to forward scanned PDFs and run visual
+queries, and `VISUAL_INGEST_TIMEOUT` (default 120 s) for that forward call.
+The visual service reads `COLPALI_MODEL`, `QWEN_MODEL`, `RENDER_DPI` and
+`VISUAL_STORAGE`.
 
 ## Google Drive integration
 
@@ -429,9 +436,10 @@ Set-Location apps/ai-service
 python -m pytest tests -q
 ```
 
-The current result is **13 passed, 4 collection errors**. The four failing
-modules are `test_citations.py`, `test_generation.py`, `test_hybrid.py` and
-`test_reranker.py` - see [Known issues](#known-issues).
+The current result is **13 passed offline; 4 modules require the running
+stack**. `test_citations.py`, `test_generation.py`, `test_hybrid.py` and
+`test_reranker.py` call Qdrant at module import time and need the Compose `ai`
+profile stack running - see [Known issues](#known-issues).
 
 Useful Compose commands from the repository root:
 
@@ -445,52 +453,32 @@ docker compose down
 
 ## Known issues
 
-These were verified against `main` at commit `f4c217b`. The first two are
-defects in the AI service; the third is a wiring gap. Full detail is in
+The AI-service blockers found during the documentation audit have been
+resolved: the missing `MatchValue` import (PR #97), the four test modules that
+broke pytest collection (PR #98), the `/ask` 500 on a missing visual
+collection (now returns "no visual documents"), and the unwired visual
+pipeline (scanned PDFs are now forwarded to the visual service during
+ingestion). Full detail is in
 [`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#known-issues-and-blockers).
 
-### 1. `MatchValue` is not imported - the BM25 path of every `/ask` fails
+### 1. `tests/demo.py` still uses the old `RBACContext` shape
 
-`apps/ai-service/retrieval/rbac_filter.py` imports `Filter, FieldCondition,
-MatchAny` but calls `MatchValue` three times without importing it, so
-`fetch_authorized_chunks()` raises `NameError: name 'MatchValue' is not
-defined`. Because `hybrid_retrieve()` calls `sparse_retrieve()`, which calls
-that function, the sparse half of hybrid retrieval fails on every `/ask`.
+It is not collected by pytest, but running it directly raises a pydantic
+`ValidationError` because `allowed_roles` is missing.
 
-**Fix:** add `MatchValue` to the import in `rbac_filter.py`.
-
-### 2. The visual collection does not exist, so `/ask` returns HTTP 500
-
-`has_visual_docs()` in `apps/ai-service/main.py` scrolls the Qdrant
-collection `ekip_visual_documents` on every `/ask` request. That collection is
-only created by the visual service, which is not in the Compose stack. Qdrant
-answers a scroll on a missing collection with 404, `qdrant-client` raises
-`UnexpectedResponse`, and nothing catches it - so `/ask` fails with a 500
-before retrieval begins.
-
-The test suite does not catch this because `test_ask_endpoint.py`
-monkeypatches `has_visual_docs` to return `False`.
-
-**Fix:** check `client.collection_exists(...)` first, or catch the 404 and
-treat it as "no visual documents".
-
-### 3. Four AI-service test modules fail at collection
+### 2. Four AI-service test modules need the running stack
 
 `test_citations.py`, `test_generation.py`, `test_hybrid.py` and
-`test_reranker.py` build `RBACContext(...)` at import time without the
-required `allowed_roles` field, so pytest aborts with a pydantic
-`ValidationError`.
+`test_reranker.py` call Qdrant at module import time, so they fail with
+connection errors unless the Compose `ai` profile stack is up.
 
-**Fix:** add `allowed_roles=[...]` to each construction and move it into a
-fixture.
+### 3. Large scanned PDFs can outlive the visual-ingest timeout
 
-### 4. The visual pipeline is never triggered
+The forward call to `/visual/ingest` uses `VISUAL_INGEST_TIMEOUT` (default
+120 s). A timeout is non-fatal - the document is still text-indexed - but it
+skips visual indexing for that document; raise the timeout for large scans.
 
-Even with the 404 handled, nothing calls `POST /visual/ingest`, the visual
-service has no Dockerfile, and it is absent from `docker-compose.yml`. The
-visual collection therefore stays empty and only the text pipeline runs.
-
-### 5. Frontend gaps
+### 4. Frontend gaps
 
 - No Google Drive page - the backend integration is unreachable from the UI.
 - Manage Users is read-only; create/edit/deactivate/reset-password have no
@@ -536,9 +524,11 @@ llama3.2:3b`.
 
 ### Search fails with a 500
 
-Check the AI service log first. Two known defects produce a 500 on the search
-path - the missing `MatchValue` import and the missing visual collection.
-Both are described in [Known issues](#known-issues).
+Check the AI service log first. The two defects that used to cause 500s on
+the search path (the missing `MatchValue` import and the missing visual
+collection) are fixed; remaining causes are usually Ollama or Qdrant being
+down. A failed visual ingest is logged in the AI service but never fails the
+request.
 
 ```powershell
 docker compose logs --tail 100 ai-service
@@ -572,7 +562,7 @@ ekip-platform/
 │   ├── frontend/          # React, Vite, Tailwind
 │   ├── backend/           # Express API, JWT auth, Prisma schema/migrations
 │   ├── ai-service/        # FastAPI, ingestion, retrieval, citations, generation
-│   └── ai-service-visual/ # FastAPI, ColPali + Qwen2-VL (not in Compose)
+│   └── ai-service-visual/ # FastAPI, ColPali + Qwen2-VL (Compose `ai` profile, GPU)
 ├── docs/                  # Deployment and project documentation
 ├── docker-compose.yml     # Local service stack and persistent volumes
 ├── PROJECT_PROGRESS.md    # Current project status
