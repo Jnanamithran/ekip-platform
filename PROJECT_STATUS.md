@@ -1,3 +1,3 @@
 # Project Status
-This file is outdated. See [PROGRESS_REPORT.md](./PROGRESS_REPORT.md) for the current state.
+This file is outdated. See [PROJECT_PROGRESS.md](./PROJECT_PROGRESS.md) for the current state.
 
