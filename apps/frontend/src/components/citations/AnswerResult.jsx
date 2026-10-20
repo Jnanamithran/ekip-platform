@@ -1,7 +1,7 @@
 import Card from "../ui/Card";
 import CitationTab from "./CitationTab";
 
-export default function AnswerResult({ result, onPreview }) {
+export default function AnswerResult({ result, onPreview, onTextPreview }) {
   const { answer, sources = [] } = result;
 
   return (
@@ -27,6 +27,7 @@ export default function AnswerResult({ result, onPreview }) {
               source={source}
               index={i + 1}
               onPreview={onPreview}
+              onTextPreview={onTextPreview}
             />
           ))}
         </div>
