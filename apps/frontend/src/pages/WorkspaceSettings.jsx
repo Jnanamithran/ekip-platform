@@ -3,6 +3,7 @@ import { apiFetch } from "../lib/apiClient";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import { RoleBadge } from "../components/ui/Badge";
+import QueryActivityChart from "../components/dashboard/QueryActivityChart";
 
 export default function WorkspaceSettings() {
   const [workspaces, setWorkspaces] = useState([]);
@@ -186,6 +187,8 @@ export default function WorkspaceSettings() {
               </Card>
             ))}
           </section>
+
+          <QueryActivityChart />
 
           <div className="grid gap-6">
             <Card className="overflow-hidden">

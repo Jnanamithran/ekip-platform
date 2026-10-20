@@ -243,7 +243,7 @@ function sendDocumentUpload(formData, token, onProgress) {
     });
 }
 
-export async function uploadDocument(file, onProgress = () => {}) {
+export async function uploadDocument(file, onProgress = () => { }) {
     const formData = new FormData();
     formData.append('file', file);
 
@@ -264,4 +264,12 @@ export async function deleteDocument(id) {
     return apiFetch('/ai/documents/' + encodeURIComponent(id), {
         method: 'DELETE',
     });
+}
+// ---------------------------------------------------------------------------
+// Admin: analytics
+// ---------------------------------------------------------------------------
+
+/** Response: { data: [{ date: 'YYYY-MM-DD' (UTC), count }] }, 7 days, oldest first */
+export async function getQueryAnalytics() {
+    return apiFetch('/admin/analytics/queries');
 }
