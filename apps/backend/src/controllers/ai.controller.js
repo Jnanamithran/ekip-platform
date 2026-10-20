@@ -476,6 +476,66 @@ async function previewDocument(req, res) {
   }
 }
 
+// --- Serve a rendered page image (visual citations for scanned PDFs) ---
+
+// Standard UUID — also guarantees the image filename built below can never
+// traverse outside the visual storage directory.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function getDocumentPageImage(req, res) {
+  const { id, page_num: pageParam } = req.params;
+  const pageNum = Number(pageParam);
+  if (!UUID_RE.test(id) || !Number.isInteger(pageNum) || pageNum < 1) {
+    return res.status(400).json({ error: 'Invalid document id or page number' });
+  }
+
+  try {
+    const document = await prisma.document.findFirst({
+      where: {
+        id,
+        department_id: req.user.department_id,
+        allowed_roles: { has: req.user.role },
+      },
+      select: { id: true },
+    });
+    if (!document) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Page images are rendered by the visual AI service during ingestion of
+    // scanned PDFs and persisted to the shared document_uploads volume at
+    // uploads/visual/{document_id}_page{N}.jpg (mounted at UPLOAD_STORAGE_DIR).
+    const imagePath = path.join(
+      UPLOAD_STORAGE_DIR,
+      'visual',
+      `${id}_page${pageNum}.jpg`
+    );
+    await fs.access(imagePath);
+
+    res.set({
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': 'private, max-age=300',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.sendFile(imagePath, (err) => {
+      if (err && !res.headersSent) {
+        res.status(err.statusCode === 404 ? 404 : 500).json({
+          error: 'Failed to load page image',
+        });
+      }
+    });
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return res.status(404).json({
+        error:
+          'No rendered page image for this document/page. Page images only exist for scanned PDFs processed by the visual pipeline.',
+      });
+    }
+    console.error('[ai] page image failed:', err.message);
+    res.status(500).json({ error: 'Failed to load page image' });
+  }
+}
+
 async function deleteDocument(req, res) {
   const { id } = req.params;
   let document;
@@ -587,6 +647,7 @@ module.exports = {
   ingest,ingestDocument,
   listDocuments,
   previewDocument,
+  getDocumentPageImage,
   updateDocumentProgress,
   deleteDocument,
 };
