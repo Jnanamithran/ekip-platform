@@ -24,7 +24,7 @@ async function createUser(req, res) {
     if (!EMAIL_RE.test(email)) {
       return res.status(400).json({ error: 'Invalid email address' });
     }
-        const passwordErrors = validatePassword(password);
+    const passwordErrors = validatePassword(password);
     if (passwordErrors.length) {
       return res.status(400).json({ error: passwordErrors.join(' '), code: 'WEAK_PASSWORD' });
     }
@@ -347,7 +347,14 @@ async function resetPassword(req, res) {
     const password_hash = await bcrypt.hash(tempPassword, 10);
 
     await prisma.$transaction([
-      prisma.user.update({ where: { id: target.id }, data: { password_hash } }),
+      prisma.user.update({
+        where: { id: target.id },
+        data: {
+          password_hash,
+          failed_login_attempts: 0,
+          locked_until: null,
+        },
+      }),
       prisma.refreshToken.deleteMany({ where: { user_id: target.id } }),
     ]);
 

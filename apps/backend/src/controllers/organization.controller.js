@@ -27,7 +27,7 @@ async function createOrganization(req, res) {
     if (!EMAIL_RE.test(admin_email)) {
       return res.status(400).json({ error: 'Invalid email address' });
     }
-   const passwordErrors = validatePassword(admin_password);
+    const passwordErrors = validatePassword(admin_password);
     if (passwordErrors.length) {
       return res.status(400).json({ error: passwordErrors.join(' '), code: 'WEAK_PASSWORD' });
     }

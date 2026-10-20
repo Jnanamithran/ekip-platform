@@ -18,7 +18,7 @@ function validatePassword(password) {
   const errors = [];
   if (password.length < 8) errors.push('Minimum 8 characters required.');
   // bcrypt only uses the first 72 bytes, and huge passwords waste server CPU
-  if (Buffer.byteLength(password, 'utf8') > 72) errors.push('Maximum 72 characters allowed.');
+  if (Buffer.byteLength(password, 'utf8') > 72) errors.push('Maximum 72 UTF-8 bytes allowed.');
   if (!/[A-Z]/.test(password)) errors.push('At least 1 uppercase letter required.');
   if (!/[a-z]/.test(password)) errors.push('At least 1 lowercase letter required.');
   if (!/[0-9]/.test(password)) errors.push('At least 1 number required.');
