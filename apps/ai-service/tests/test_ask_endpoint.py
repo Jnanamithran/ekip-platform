@@ -57,6 +57,7 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
         'filename': 'guide.pdf',
         'page': 2,
         'excerpt': 'Follow the approved process.',
+        'type': 'text',
     }]
     assert reported_stages == [
         'Searching your authorized documents',

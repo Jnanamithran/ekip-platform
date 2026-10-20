@@ -420,7 +420,6 @@ async def ingest(
                 org_id       = rbac_info.org_id,
                 workspace_id = rbac_info.workspace_id,
                 department_id = rbac_info.department_id,
-                role         = rbac_info.role,
                 allowed_roles = allowed_roles,
                 uploaded_by  = rbac_info.user_id or 'user-' + str(uuid.uuid4())[:8],
             )
