@@ -24,10 +24,11 @@ query = sys.argv[1]
 
 # ── RBAC context (hardcoded for demo — comes from JWT in v0.3) ────────────────
 rbac = RBACContext(
-    org_id="demo-org-001",
-    workspace_id="demo-workspace-001",
-    department_id="demo-dept-001",
-    role="Admin"
+    org_id="org-1",
+    workspace_id="ws-1",
+    department_id="dept-1",
+    role="Manager",
+    allowed_roles=["Admin", "Manager"],
 )
 
 # ── helpers ───────────────────────────────────────────────────────────────────
