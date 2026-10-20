@@ -1,16 +1,27 @@
-# React + Vite
+# EKIP frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The frontend is the React 19 and Vite application in this directory. It
+provides the browser UI for EKIP; the Express backend and data services must
+also be running for authenticated features.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From this directory:
 
-## React Compiler
+```powershell
+npm ci
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Set `VITE_API_URL` in `.env` to the backend URL used by the browser, normally
+`http://localhost:5000`. Open <http://localhost:5173>.
 
-## Expanding the Oxlint configuration
+## Checks
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```powershell
+npm run lint
+npm run build
+```
+
+For full-stack setup, Docker, environment configuration, and user instructions,
+see the repository [README](../../README.md).

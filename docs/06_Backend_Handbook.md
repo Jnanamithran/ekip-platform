@@ -1,203 +1,190 @@
 # Backend Handbook
 
-Owner: Backend Developer. Covers the Express API, authentication, RBAC middleware and request/response formats.
+The backend is the Express application in `apps/backend`. It owns identity,
+organization scoping, application APIs, PostgreSQL access through Prisma, and
+the proxy between the browser and AI service.
 
-Stack: Node.js, Express.js, JWT, PostgreSQL, Prisma ORM (`apps/backend`).
+## Local setup
 
-## Authentication and RBAC
+Install Node.js, run PostgreSQL, and create the `ekip` database. Create
+`apps/backend/.env` using the example file as a guide:
 
-### Overview
-The backend authenticates users with JWTs. The token is the source of truth for a user's organization, workspace, department and role. The AI service relies on these values, so they are only ever read from the verified token, never from a request body.
+```dotenv
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/ekip?schema=public"
+JWT_SECRET=use-a-long-private-random-value
+PORT=5000
+AI_SERVICE_URL=http://localhost:8000
+QDRANT_URL=http://localhost:6333
+UPLOAD_STORAGE_DIR=uploads
+FRONTEND_ORIGINS=http://localhost:5173
+```
 
-- **Access token:** JWT signed with HS256, expires after 15 minutes.
-- **Refresh token:** random string valid for 7 days, single use. Only its SHA-256 hash is stored in the `RefreshToken` table.
-- Protected requests send `Authorization: Bearer <access_token>`.
+From the backend directory:
 
-### Token payload
-| Field | Meaning |
-|---|---|
-| `user_id` | The user's id |
-| `org_id` | The user's organization (looked up through department → workspace) |
-| `workspace_id` | The user's workspace |
-| `department_id` | The user's department |
-| `role` | `Admin`, `Manager`, `Employee` or `Intern` |
+```powershell
+npm ci
+npx prisma generate --schema src/prisma/schema.prisma
+npx prisma migrate deploy --schema src/prisma/schema.prisma
+npm run dev
+```
 
-These are the field names agreed with the AI service.
+The package scripts are `dev` (nodemon), `start` (Node), and `test` (Jest).
+Compose applies migrations before starting the backend container.
 
-### Endpoints
+## Authentication and roles
 
-**POST /auth/login**
-- Body: `{ "email": "...", "password": "..." }`
-- 200: `{ "access_token": "...", "refresh_token": "..." }`
-- 400: email or password missing
-- 401: invalid email or password (same message for both cases, `code: "INVALID_CREDENTIALS"`)
-- 403: account deactivated (`code: "ACCOUNT_DEACTIVATED"`), returned only after the correct password
-- 423: account locked after 5 failed attempts (`code: "ACCOUNT_LOCKED"`, with `locked_until`), returned even when the password is correct
+The API uses signed access JWTs and rotating refresh tokens. The backend
+verifies access tokens and attaches user, organization, workspace, department,
+and role information to the request. Protected AI requests forward the
+validated identity context to the AI service.
 
-**POST /auth/refresh**
-- Body: `{ "refresh_token": "..." }`
-- 200: a new `access_token` and a new `refresh_token`. The old refresh token is deleted, so it cannot be used again.
-- 400: `refresh_token` missing
-- 401: invalid or expired refresh token
-- 403: account deactivated (`code: "ACCOUNT_DEACTIVATED"`)
+Roles defined in the backend Prisma schema:
 
-**POST /auth/logout**
-- Body: `{ "refresh_token": "..." }`
-- 200: `{ "message": "Logged out" }`. The refresh token can no longer be used.
-- 400: `refresh_token` missing
+| Role | Typical purpose |
+| --- | --- |
+| `Admin` | Organization administration and user/workspace management |
+| `Manager` | Authorized document and Google Drive operations |
+| `Employee` | Standard workspace access |
+| `Intern` | Restricted standard workspace access |
 
-**GET /auth/me** (requires access token)
-- 200: `{ "user": { user_id, org_id, workspace_id, department_id, role } }`
-- 401: missing, malformed, tampered or expired token
+Protected route groups apply authentication middleware. Admin endpoints also
+require the Admin role. Google Drive endpoints require Admin or Manager except
+the OAuth callback, whose identity is checked using signed OAuth state.
 
-**POST /admin/users** (Admin only)
-- Body: `{ "email", "password", "role", "department_id" }`
-- Rules: valid email, password meeting the password policy below, `role` must be one of the four roles, and `department_id` must belong to the admin's own organization.
-- 201: `{ "user": { id, email, role, department_id } }` (the password hash is never returned)
-- 400: invalid or missing fields, or weak password (`code: "WEAK_PASSWORD"`)
-- 401: no or invalid token
-- 403: caller is not an Admin
-- 404: department not found (also returned when it belongs to another organization)
-- 409: a user with that email already exists
+### Authentication endpoints
 
-### User lifecycle (Admin only)
-All four routes only act on users inside the admin's own organization. A user in another organization returns 404, the same as one that does not exist.
+| Method and path | Purpose |
+| --- | --- |
+| `POST /organizations` | Create organization, initial workspace/department, and first Admin |
+| `POST /auth/login` | Verify credentials and issue tokens |
+| `POST /auth/refresh` | Rotate a refresh token |
+| `POST /auth/logout` | Revoke a refresh token |
+| `GET /auth/me` | Return the authenticated user's identity |
 
-**PATCH /admin/users/:id**
-- Body (all optional, at least one required): `{ "email", "role", "department_id" }`
-- `department_id` must belong to the admin's own organization. An admin cannot change their own role.
-- 200: `{ "user": { id, email, role, department_id, active } }`
-- 400: invalid field, nothing to update, or changing own role
-- 404: user or department not found
-- 409: email already in use
+Password policy and account lockout are enforced when setting credentials and
+logging in. Refresh tokens are stored hashed, and successful refresh replaces
+the previous token.
 
-**POST /admin/users/:id/reset-password**
-- 200: `{ "temp_password", "message" }`. The password is random (`crypto.randomBytes`). All of the user's refresh tokens are deleted, so they are logged out everywhere. Any account lock is cleared, so the user can log in with the new password right away.
-- 404: user not found
+## Main API surface
 
-**PATCH /admin/users/:id/deactivate**
-- 200: `{ "message": "User deactivated." }`
-- 400: an admin cannot deactivate their own account
-- 404: user not found
+### Admin APIs
 
-**PATCH /admin/users/:id/reactivate**
-- 200: `{ "message": "User reactivated." }`
-- 404: user not found
+All `/admin` endpoints require an authenticated Admin:
 
-**Design decisions**
-- Deactivation is a soft flag (`User.active`), not a delete, so documents they uploaded stay linked to them.
-- Deactivating deletes the user's refresh tokens, and `login` and `refresh` reject inactive users.
-- A deactivated user's current access token stays valid until it expires (up to 15 minutes). Closing that gap would need a database check in `authenticate` on every request.
-- Deactivate and reset run the database update and the token deletion in one transaction, so both happen or neither does.
+| Method and path | Purpose |
+| --- | --- |
+| `GET /admin/analytics/queries` | Organization query counts for recent days |
+| `GET`, `POST /admin/users` | List or create users |
+| `PATCH /admin/users/:id` | Update user details |
+| `POST /admin/users/:id/reset-password` | Reset a user's password |
+| `PATCH /admin/users/:id/deactivate` | Deactivate a user |
+| `PATCH /admin/users/:id/reactivate` | Reactivate a user |
+| `GET`, `POST /admin/workspaces` | List or create workspaces |
+| `GET /admin/workspaces/:workspaceId` | Workspace dashboard data |
+| `PATCH /admin/workspaces/:workspaceId` | Update workspace |
+| `GET`, `POST /admin/departments` | List or create departments |
 
-### Middleware
-- `authenticate`: verifies the access token and attaches `req.user` (the five fields above). Returns 401 if the token is missing or invalid.
-- `requireRole(...roles)`: used after `authenticate`. Returns 403 if `req.user.role` is not in the list.
-- All routes under `/admin` use both, applied once in `admin.routes.js`.
+The backend enforces organization boundaries for administration. The frontend
+may expose only a subset of the backend's administrative controls.
 
-### AI service context
-Query time sends `org_id`, `workspace_id`, `department_id` and `role`. Document upload sends `org_id`, `workspace_id`, `department_id`, `allowed_roles` and `uploaded_by`. All values come from `req.user`. (Upload and query routes are not built yet.)
+### AI and document APIs
 
-### Document re-indexing
+Protected `/ai` endpoints include:
 
-**POST /ai/documents/:id/reindex** (Admin or Manager; same department)
-- Re-processes the retained original file using its existing document ID and access-role list.
-- Returns 200 after processing completes. Document status and progress are updated while the AI service runs.
-- Returns 404 if the document does not exist, 403 if it belongs to another department, 409 if it is already processing or its original file is unavailable, and 415 for unsupported file types.
-- Uses the same per-user upload rate limit as `POST /ai/ingest`.
-- Existing text and visual vectors for the document are removed before re-ingestion. A processing failure is recorded on the document as `Failed` or `Timed out`.
+| Method and path | Purpose |
+| --- | --- |
+| `POST /ai/ask` | Ask a question against authorized content |
+| `POST /ai/ask/progress`, `GET /ai/ask/progress/:requestId` | Report/read answer progress |
+| `GET /ai/history`, `DELETE /ai/history` | List or clear the current user's answer history |
+| `POST /ai/ingest` | Upload and index a document |
+| `POST /ai/documents/:id/reindex` | Reprocess a retained document; Admin or Manager |
+| `GET /ai/documents` | List documents visible to the current user |
+| `GET /ai/documents/:id/preview` | Stream an authorized retained original |
+| `GET /ai/documents/:id/page-image/:page_num` | Stream a rendered visual-page image |
+| `DELETE /ai/documents/:id` | Delete an authorized document and indexed data |
+| `GET /ai/health` | Check the AI service connection |
 
-## Analytics (Admin only)
+Uploads have a 50 MB limit. User and tenant fields come from the authenticated
+context; clients must not be allowed to assign themselves another tenant's
+permissions.
 
-**GET /admin/analytics/queries**
-- 200: `{ "data": [{ "date": "2026-10-20", "count": 12 }, ...] }`. The last 7 days (UTC), oldest first. Every day is present, with `count: 0` when nobody asked a question.
-- Counts the questions answered for users in the admin's own organization. The organization comes from the token, not from the request.
-- 401: no or invalid token
-- 403: caller is not an Admin
+### Google Drive APIs
 
-**Design decisions**
-- Admin-only, whole organization, UTC days. Managers and per-workspace views are not included yet.
-- `AiAnswerHistory` stores only `user_id`, so the endpoint first finds the organization's users, then counts their rows.
+Google Drive integration is available through the frontend Integrations page
+and these backend routes:
 
-**Known limitation:** counts come from `AiAnswerHistory`. "Clear history" (`DELETE /ai/history`) deletes a user's rows, so the chart goes down when users clear their history. Only answered questions are recorded. A permanent fix (a soft-delete flag or a separate query log) is a schema decision.
+| Method and path | Purpose |
+| --- | --- |
+| `GET /integrations/google/connect` | Start OAuth connection |
+| `GET /integrations/google/callback` | OAuth redirect callback |
+| `GET /integrations/google/status` | Check connection status |
+| `GET /integrations/google/files` | List supported Drive files |
+| `POST /integrations/google/import` | Import files with EKIP role access |
+| `DELETE /integrations/google/disconnect` | Remove the connection |
 
-## Google Drive integration
+Import accepts PDF, DOCX, XLSX, or TXT files. Drive sharing permissions are
+not copied; EKIP's selected roles control access. Configure Google OAuth
+credentials and encryption/state secrets only when enabling the integration.
 
-Users connect their Google Drive, pick files, and choose `allowed_roles` per file in the EKIP UI. EKIP downloads each file and ingests it with that access list. Drive's own permissions are ignored. EKIP's RBAC applies.
+## Rate limiting and security behavior
 
-All routes need an access token and the Admin or Manager role, except the callback.
+The backend includes request limits for login, refresh, signup, AI queries,
+uploads, and Drive imports. Limits and policy configuration are documented in
+`apps/backend/.env.example` and enforced by middleware.
 
-**GET /integrations/google/connect**
-- 200: `{ "url" }`. The frontend opens this Google sign-in URL.
+Additional behaviors include account lockout after repeated failed logins,
+password-policy checks, deactivation, hashed rotating refresh tokens, scoped
+document access, and encryption for stored Google OAuth tokens. These controls
+do not replace a production security review, HTTPS, centralized rate limiting,
+or operational monitoring.
 
-**GET /integrations/google/callback** (called by Google, not the frontend)
-- Reads `code` and a signed `state` (a JWT that carries the user id, valid for 10 minutes, signed with `OAUTH_STATE_SECRET`).
-- Redirects to `<frontend>/integrations?connected=google`, or `?error=access_denied` / `?error=connect_failed`.
-- 400: invalid, tampered or expired `state`.
+## Database and migrations
 
-**GET /integrations/google/status**
-- 200: `{ "connected": true | false }`
+Prisma schema: `src/prisma/schema.prisma`
 
-**GET /integrations/google/files** (optional `?page_token=`)
-- 200: `{ "files": [{ id, name, mimeType, modifiedTime, size }], "next_page_token" }`. Only PDF, DOCX, XLSX and TXT files that are not in the trash are listed.
-- 400: not connected, or `code: "GOOGLE_RECONNECT_REQUIRED"` (the stored connection expired and was deleted).
+Migrations: `src/prisma/migrations/`
 
-**POST /integrations/google/import**
-- Body: `{ "files": [{ "file_id", "allowed_roles": ["Admin", "Manager"] }] }`, 1 to 5 files.
-- Rules: `allowed_roles` must be a non-empty list of valid roles and must include the importer's own role.
-- File name and type come from Drive, never from the request body. Files over 50 MB are skipped.
-- 200: `{ "results": [{ file_id, filename, status: "success" | "error", error?, document_id? }] }`. One file failing does not fail the others.
-- 400: invalid body, not connected, or `GOOGLE_RECONNECT_REQUIRED`.
+For normal startup or a clean local install:
 
-**DELETE /integrations/google/disconnect**
-- 200: `{ "message": "Google Drive disconnected." }`. The stored tokens are deleted.
+```powershell
+npx prisma generate --schema src/prisma/schema.prisma
+npx prisma migrate deploy --schema src/prisma/schema.prisma
+```
 
-### Design decisions
-- Read-only scope (`drive.readonly`).
-- Google tokens are encrypted before storage (AES-256-GCM, key in `TOKEN_ENCRYPTION_KEY`), and decrypted only when calling Google.
-- The OAuth callback is the only route without a login token. Its identity comes from the signed `state`.
-- Imports go through the same `ingestDocument` helper as normal uploads. The same `allowed_roles` list is saved in Postgres and sent to the AI service for the Qdrant chunks.
-- In Google's Testing mode, a refresh token expires after 7 days. The app then returns `GOOGLE_RECONNECT_REQUIRED`.
+When intentionally creating a schema migration during development, use Prisma
+migration tooling and commit the resulting migration directory with the schema
+change. Do not edit a deployed migration in place.
 
-## Password policy and account lockout
+## Environment variables
 
-### Password policy
-Every new password (organization signup, admin creating a user, admin password reset) must:
-- be at least 8 characters and at most 72 UTF-8 bytes (the bcrypt limit),
-- contain an uppercase letter, a lowercase letter and a number,
-- not be one of the common passwords in `src/utils/passwordPolicy.js`.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `JWT_SECRET` | Yes | Access-token signing secret |
+| `PORT` | No | HTTP port; defaults to 5000 in the project setup |
+| `AI_SERVICE_URL` | No | Text AI service base URL |
+| `QDRANT_URL` | No | Qdrant URL for document operations |
+| `FRONTEND_ORIGINS` | No | Comma-separated allowed frontend origins |
+| `UPLOAD_STORAGE_DIR` | No | Private retained upload directory |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Drive only | Google OAuth client |
+| `TOKEN_ENCRYPTION_KEY` | Drive only | Encrypts tokens at rest |
+| `OAUTH_STATE_SECRET` | Drive only | Signs OAuth state |
 
-A rejected password answers 400 with `code: "WEAK_PASSWORD"` and all failed rules joined in `error`. The policy is only checked when a password is set, so existing users can always log in with their current password.
+See [`.env.example`](../apps/backend/.env.example) for other rate-limit and
+OAuth settings. Never put real values in documentation, screenshots, or
+commits.
 
-### Account lockout
-- Every failed login increments `User.failed_login_attempts`.
-- On the 5th failed attempt the account is locked for 15 minutes (`User.locked_until`).
-- A locked account answers 423 with `code: "ACCOUNT_LOCKED"`, even when the password is correct.
-- A successful login resets the counter, and an admin password reset clears the lock immediately.
-- Unlike rate limiting, the counters live in Postgres, so they survive server restarts.
+## Testing
 
-## Rate limiting
+From `apps/backend`:
 
-Limits protect login and the AI service from abuse. When a limit is hit, the response is HTTP 429 with `{ "error": "...", "code": "RATE_LIMITED" }` and a `Retry-After` header (in seconds).
+```powershell
+npm ci
+npm test
+```
 
-| Endpoint | Limit | Counted per | Env variable |
-|---|---|---|---|
-| POST /auth/login | 5 failed / 15 min | IP + email (successful logins are not counted) | `RATE_LIMIT_LOGIN_MAX` |
-| POST /auth/login | 30 failed / 15 min | IP | `RATE_LIMIT_LOGIN_IP_MAX` |
-| POST /auth/refresh | 20 / min | IP | `RATE_LIMIT_REFRESH_MAX` |
-| POST /organizations | 3 / hour | IP | `RATE_LIMIT_SIGNUP_MAX` |
-| POST /ai/ask | 30 / min | user | `RATE_LIMIT_QUERY_MAX` |
-| POST /ai/ingest | 10 / min | user | `RATE_LIMIT_UPLOAD_MAX` |
-| POST /integrations/google/import | 5 / min | user | `RATE_LIMIT_IMPORT_MAX` |
+The test suite is in `apps/backend/tests`. Validate the Prisma schema with:
 
-**Notes**
-- The progress, history and document-list routes are not limited, because the UI polls them.
-- Counters are kept in server memory, so they reset when the server restarts and are not shared between several backend instances.
-- `trust proxy` is not enabled. If a reverse proxy is added in front of the backend, it must be configured, or every client appears with the proxy's IP.
-- For demos, raise `RATE_LIMIT_SIGNUP_MAX`, since creating several organizations from one machine hits the limit quickly.
-
-### Setup
-Create an OAuth client in Google Cloud Console (Web application, redirect URI `http://localhost:5000/integrations/google/callback`), and add testers on the consent screen. `.env` needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `TOKEN_ENCRYPTION_KEY` and `OAUTH_STATE_SECRET`. Generate the two secrets with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-
-### Local setup
-`.env` needs `PORT`, `JWT_SECRET` and `DATABASE_URL`. Run `npx prisma migrate dev` to create the tables, then `node src/prisma/seed.js` to create the demo admin (set `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` first).
+```powershell
+npx prisma validate --schema src/prisma/schema.prisma
+```
