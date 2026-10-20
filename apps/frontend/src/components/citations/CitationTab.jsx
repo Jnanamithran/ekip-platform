@@ -1,5 +1,23 @@
-export default function CitationTab({ source, index, onPreview, onTextPreview }) {
+export default function CitationTab({ source, index, onPreview, onTextPreview, onVisualPreview }) {
   const isPdf = source.filename?.toLowerCase().endsWith(".pdf");
+  const isVisual = source.type === "visual";
+
+  function handleCitationClick() {
+    if (isVisual) {
+      // Show the rendered page image (ColPali visual pipeline)
+      if (onVisualPreview) onVisualPreview(source);
+      else if (onPreview && source.document_id)
+        onPreview(source.document_id, source.filename, source.page);
+      return;
+    }
+    if (isPdf) {
+      if (source.document_id && onPreview)
+        onPreview(source.document_id, source.filename, source.page);
+      return;
+    }
+    if (source.excerpt && onTextPreview)
+      onTextPreview(source.filename, source.page, source.excerpt);
+  }
 
   return (
     <div className="rounded-md border border-signal/30 bg-signal-soft/60 px-3 py-2">
@@ -27,10 +45,18 @@ export default function CitationTab({ source, index, onPreview, onTextPreview })
           </p>
         </div>
       </details>
-      {isPdf && source.document_id && onPreview ? (
+      {isVisual && source.document_id ? (
           <button
             type="button"
-            onClick={() => onPreview(source.document_id, source.filename, source.page)}
+            onClick={handleCitationClick}
+            className="mt-2 text-left text-xs font-medium text-index underline underline-offset-2"
+          >
+            View page image (p. {source.page || 1})
+          </button>
+      ) : isPdf && source.document_id && onPreview ? (
+          <button
+            type="button"
+            onClick={handleCitationClick}
             className="mt-2 text-left text-xs font-medium text-index underline underline-offset-2"
           >
             Preview PDF at page {source.page || 1}
@@ -42,7 +68,7 @@ export default function CitationTab({ source, index, onPreview, onTextPreview })
       ) : source.excerpt && onTextPreview ? (
         <button
           type="button"
-          onClick={() => onTextPreview(source.filename, source.page, source.excerpt)}
+          onClick={handleCitationClick}
           className="mt-2 text-left text-xs font-medium text-index underline underline-offset-2"
         >
           View full excerpt

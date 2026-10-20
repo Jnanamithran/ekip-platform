@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { askQuestion, clearAnswerHistory, getAnswerHistory, getAskProgress } from "../lib/apiClient";
 import AnswerResult from "../components/citations/AnswerResult";
 import TextPreviewModal from "../components/citations/TextPreviewModal";
+import PageImagePreview from "../components/citations/PageImagePreview";
 import PdfPreview from "../components/documents/PdfPreview";
 import Button from "../components/ui/Button";
 
@@ -17,6 +18,7 @@ export default function Search() {
   const [progressError, setProgressError] = useState("");
   const [preview, setPreview] = useState(null);
   const [textPreview, setTextPreview] = useState(null);
+  const [visualPreview, setVisualPreview] = useState(null);
   const latestMessageRef = useRef(null);
 
   useEffect(() => {
@@ -97,6 +99,7 @@ export default function Search() {
       setHistory([]);
       setPreview(null);
       setTextPreview(null);
+      setVisualPreview(null);
     } catch (err) {
       setHistoryError(err.message);
     } finally {
@@ -138,6 +141,8 @@ export default function Search() {
                 setPreview({ documentId, filename, page });
               }} onTextPreview={(filename, page, excerpt) => {
                 setTextPreview({ filename, page, excerpt });
+              }} onVisualPreview={(citation) => {
+                setVisualPreview(citation);
               }} />
             )}
           </div>
@@ -188,6 +193,12 @@ export default function Search() {
           page={textPreview.page}
           excerpt={textPreview.excerpt}
           onClose={() => setTextPreview(null)}
+        />
+      )}
+      {visualPreview && (
+        <PageImagePreview
+          citation={visualPreview}
+          onClose={() => setVisualPreview(null)}
         />
       )}
     </div>
