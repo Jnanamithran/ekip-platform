@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const aiController = require('../controllers/ai.controller');
 const { authenticate } = require('../middleware/auth.middleware');
+const { queryLimiter, uploadLimiter } = require('../middleware/rateLimiter');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -16,14 +17,14 @@ router.use(authenticate, (req, res, next) => {
 });
 
 // Query the knowledge base (retrieval + generation + citations)
-router.post('/ask', aiController.ask);
+router.post('/ask', queryLimiter,aiController.ask);
 router.post('/ask/progress', aiController.updateAskProgress);
 router.get('/ask/progress/:requestId', aiController.getAskProgress);
 router.get('/history', aiController.listAnswerHistory);
 router.delete('/history', aiController.clearAnswerHistory);
 
 // Upload and process a document (ingestion pipeline)
-router.post('/ingest', upload.single('file'), aiController.ingest);
+router.post('/ingest',uploadLimiter, upload.single('file'), aiController.ingest);
 router.post('/documents/:id/progress', aiController.updateDocumentProgress);
 router.get('/documents/:id/preview', aiController.previewDocument);
 

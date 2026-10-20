@@ -1,5 +1,6 @@
 const express = require('express');
 const { authenticate, requireRole } = require('../middleware/auth.middleware');
+const { importLimiter } = require('../middleware/rateLimiter');
 const {
   connect, callback, status, listFiles, importFiles, disconnect,
 } = require('../controllers/integrations.controller');
@@ -16,7 +17,7 @@ router.use(authenticate, requireRole('Admin', 'Manager'));
 router.get('/google/connect', connect);
 router.get('/google/status', status);
 router.get('/google/files', listFiles);
-router.post('/google/import', importFiles);
+router.post('/google/import', importLimiter,importFiles);
 router.delete('/google/disconnect', disconnect);
 
 module.exports = router;

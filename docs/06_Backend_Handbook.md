@@ -149,6 +149,26 @@ All routes need an access token and the Admin or Manager role, except the callba
 - Imports go through the same `ingestDocument` helper as normal uploads. The same `allowed_roles` list is saved in Postgres and sent to the AI service for the Qdrant chunks.
 - In Google's Testing mode, a refresh token expires after 7 days. The app then returns `GOOGLE_RECONNECT_REQUIRED`.
 
+## Rate limiting
+
+Limits protect login and the AI service from abuse. When a limit is hit, the response is HTTP 429 with `{ "error": "...", "code": "RATE_LIMITED" }` and a `Retry-After` header (in seconds).
+
+| Endpoint | Limit | Counted per | Env variable |
+|---|---|---|---|
+| POST /auth/login | 5 failed / 15 min | IP + email (successful logins are not counted) | `RATE_LIMIT_LOGIN_MAX` |
+| POST /auth/login | 30 failed / 15 min | IP | `RATE_LIMIT_LOGIN_IP_MAX` |
+| POST /auth/refresh | 20 / min | IP | `RATE_LIMIT_REFRESH_MAX` |
+| POST /organizations | 3 / hour | IP | `RATE_LIMIT_SIGNUP_MAX` |
+| POST /ai/ask | 30 / min | user | `RATE_LIMIT_QUERY_MAX` |
+| POST /ai/ingest | 10 / min | user | `RATE_LIMIT_UPLOAD_MAX` |
+| POST /integrations/google/import | 5 / min | user | `RATE_LIMIT_IMPORT_MAX` |
+
+**Notes**
+- The progress, history and document-list routes are not limited, because the UI polls them.
+- Counters are kept in server memory, so they reset when the server restarts and are not shared between several backend instances.
+- `trust proxy` is not enabled. If a reverse proxy is added in front of the backend, it must be configured, or every client appears with the proxy's IP.
+- For demos, raise `RATE_LIMIT_SIGNUP_MAX`, since creating several organizations from one machine hits the limit quickly.
+
 ### Setup
 Create an OAuth client in Google Cloud Console (Web application, redirect URI `http://localhost:5000/integrations/google/callback`), and add testers on the consent screen. `.env` needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `TOKEN_ENCRYPTION_KEY` and `OAUTH_STATE_SECRET`. Generate the two secrets with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
