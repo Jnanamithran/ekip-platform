@@ -14,7 +14,14 @@ def test_ingest_reads_uploaded_pdf_bytes(monkeypatch):
         with open(file_path, 'rb') as uploaded_file:
             parsed['bytes'] = uploaded_file.read()
         parsed['filename'] = filename
-        return SimpleNamespace(filename=filename, pages=[SimpleNamespace(page_num=1)])
+        from ingestion.schema import FileType
+
+        return SimpleNamespace(
+            filename=filename,
+            file_type=FileType.PDF,
+            pages=[SimpleNamespace(page_num=1)],
+            is_scanned_or_empty=False,
+        )
 
     async def fake_report_progress(token, endpoint, **details):
         reported_stages.append(details)
