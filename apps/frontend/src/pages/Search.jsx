@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { askQuestion, clearAnswerHistory, getAnswerHistory, getAskProgress } from "../lib/apiClient";
 import AnswerResult from "../components/citations/AnswerResult";
+import TextPreviewModal from "../components/citations/TextPreviewModal";
 import PdfPreview from "../components/documents/PdfPreview";
 import Button from "../components/ui/Button";
 
@@ -15,6 +16,7 @@ export default function Search() {
   const [processingStage, setProcessingStage] = useState("");
   const [progressError, setProgressError] = useState("");
   const [preview, setPreview] = useState(null);
+  const [textPreview, setTextPreview] = useState(null);
   const latestMessageRef = useRef(null);
 
   useEffect(() => {
@@ -94,6 +96,7 @@ export default function Search() {
       await clearAnswerHistory();
       setHistory([]);
       setPreview(null);
+      setTextPreview(null);
     } catch (err) {
       setHistoryError(err.message);
     } finally {
@@ -123,7 +126,7 @@ export default function Search() {
       </div>
 
       <div className="flex flex-col gap-4">
-        {historyLoading && <p role="status" className="text-sm text-slate">Loading question history…</p>}
+        {historyLoading && <p role="status" className="text-sm text-slate">Loading question history.</p>}
         {historyError && <p role="alert" className="text-sm text-danger">{historyError}</p>}
         {history.map((entry) => (
           <div key={entry.id || `${entry.query}-${entry.created_at}`} className="flex flex-col gap-2">
@@ -133,6 +136,8 @@ export default function Search() {
             ) : (
               <AnswerResult result={entry.result} onPreview={(documentId, filename, page) => {
                 setPreview({ documentId, filename, page });
+              }} onTextPreview={(filename, page, excerpt) => {
+                setTextPreview({ filename, page, excerpt });
               }} />
             )}
           </div>
@@ -175,6 +180,14 @@ export default function Search() {
           filename={preview.filename}
           page={preview.page}
           onClose={() => setPreview(null)}
+        />
+      )}
+      {textPreview && (
+        <TextPreviewModal
+          filename={textPreview.filename}
+          page={textPreview.page}
+          excerpt={textPreview.excerpt}
+          onClose={() => setTextPreview(null)}
         />
       )}
     </div>

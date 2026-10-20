@@ -1,4 +1,4 @@
-export default function CitationTab({ source, index, onPreview }) {
+export default function CitationTab({ source, index, onPreview, onTextPreview }) {
   const isPdf = source.filename?.toLowerCase().endsWith(".pdf");
 
   return (
@@ -14,11 +14,11 @@ export default function CitationTab({ source, index, onPreview }) {
           <span className="truncate font-mono text-ink-soft">
             {source.filename}
             {source.page != null && (
-              <span className="text-slate"> · p.{source.page}</span>
+              <span className="text-slate"> &middot; p.{source.page}</span>
             )}
           </span>
           <span className="ml-auto text-slate-light transition-transform group-open:rotate-180">
-            ▾
+            &#x25BE;
           </span>
         </summary>
         <div className="border-t border-signal/20 pt-2">
@@ -39,6 +39,14 @@ export default function CitationTab({ source, index, onPreview }) {
         <p className="mt-2 text-xs text-slate">
           PDF preview unavailable. Re-upload this PDF to enable preview.
         </p>
+      ) : source.excerpt && onTextPreview ? (
+        <button
+          type="button"
+          onClick={() => onTextPreview(source.filename, source.page, source.excerpt)}
+          className="mt-2 text-left text-xs font-medium text-index underline underline-offset-2"
+        >
+          View full excerpt
+        </button>
       ) : null}
     </div>
   );
