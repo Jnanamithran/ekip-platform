@@ -306,3 +306,43 @@ export async function setUserActive(id, active) {
 export async function getDepartments() {
     return apiFetch('/admin/departments');
 }
+
+// ---------------------------------------------------------------------------
+// Google Drive integration
+// ---------------------------------------------------------------------------
+
+/** Response: { connected: boolean } */
+export async function getDriveConnection() {
+    return apiFetch('/integrations/google/status');
+}
+
+/** Response: { url } — open this URL so the user can grant Drive access. */
+export async function getDriveConnectUrl() {
+    return apiFetch('/integrations/google/connect');
+}
+
+/**
+ * Lists ingestible Drive files (PDF/DOCX/XLSX/TXT, not trashed).
+ * Response: { files: [{ id, name, mimeType, modifiedTime, size }], next_page_token }
+ */
+export async function getDriveFiles(pageToken) {
+    const qs = pageToken ? '?page_token=' + encodeURIComponent(pageToken) : '';
+    return apiFetch('/integrations/google/files' + qs);
+}
+
+/**
+ * Import Drive files with per-file RBAC.
+ * Body: { files: [{ file_id, allowed_roles: [...] }] } (1-5 files per call;
+ * backend requires allowed_roles to be non-empty and include your own role).
+ * Response: { results: [{ file_id, filename, status: 'success'|'error', chunk_count?, error? }] }
+ */
+export async function importDriveFiles(files) {
+    return apiFetch('/integrations/google/import', {
+        method: 'POST',
+        body: JSON.stringify({ files }),
+    });
+}
+
+export async function disconnectDrive() {
+    return apiFetch('/integrations/google/disconnect', { method: 'DELETE' });
+}
