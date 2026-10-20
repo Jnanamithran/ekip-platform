@@ -266,6 +266,15 @@ export async function deleteDocument(id) {
     });
 }
 // ---------------------------------------------------------------------------
+// Admin: analytics
+// ---------------------------------------------------------------------------
+
+/** Response: { data: [{ date: 'YYYY-MM-DD' (UTC), count }] }, 7 days, oldest first */
+export async function getQueryAnalytics() {
+    return apiFetch('/admin/analytics/queries');
+}
+
+// ---------------------------------------------------------------------------
 // Admin: user management
 // ---------------------------------------------------------------------------
 
