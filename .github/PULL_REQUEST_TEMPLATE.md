@@ -20,3 +20,4 @@
 
 ## Related Issues
 <!-- Closes # -->
+Closes #<issue-number>

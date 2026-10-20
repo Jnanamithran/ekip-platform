@@ -1,252 +1,152 @@
-# EKIP — Enterprise Knowledge Intelligence Platform
+# EKIP
 
-EKIP is a multi-tenant workspace for indexing organizational documents and
-answering questions from their contents. It combines a React frontend, an
-Express API, a FastAPI retrieval and generation service, PostgreSQL, Qdrant,
-and a local Ollama model.
+EKIP (Enterprise Knowledge Intelligence Platform) is a local-first document
+workspace. Users upload organizational documents, and the application answers
+questions using content the signed-in user is authorized to access. The project
+combines a React frontend, an Express/Prisma backend, PostgreSQL, a FastAPI AI
+service, Qdrant, and Ollama.
 
-Questions are answered from documents the signed-in user is allowed to access.
-The normal question-answering flow does not use public web search or a hosted
-LLM API.
-
-> **Current state:** this is a working prototype with known defects. Three
-> verified issues affect the search path - see
-> [Known issues](#known-issues) before you rely on it. The project status
-> report is [`PROJECT_PROGRESS.md`](./PROJECT_PROGRESS.md), and the AI
-> pipeline is documented in
-> [`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md).
+This is a development prototype, not a production-hardened service. Review
+[known limitations](#known-limitations) before using it with sensitive or
+business-critical data.
 
 ## Contents
 
-- [What EKIP does](#what-ekip-does)
-- [Architecture and data](#architecture-and-data)
-- [Start with Docker Desktop](#start-with-docker-desktop)
-- [Create an account and use EKIP](#create-an-account-and-use-ekip)
-- [Run services locally](#run-services-locally)
-- [Configuration and ports](#configuration-and-ports)
-- [Google Drive integration](#google-drive-integration)
-- [Development and validation](#development-and-validation)
-- [Known issues](#known-issues)
-- [Troubleshooting](#troubleshooting)
-- [Project layout](#project-layout)
+- [Architecture](#architecture)
+- [Run everything with Docker](#run-everything-with-docker)
+- [Run application code locally without Docker](#run-application-code-locally-without-docker)
+- [Use EKIP](#use-ekip)
+- [Configuration](#configuration)
+- [Tests and checks](#tests-and-checks)
+- [Known limitations](#known-limitations)
+- [Project documentation](#project-documentation)
 
-## What EKIP does
-
-### Workspaces and members
-
-An organization is created during signup, along with its first workspace,
-department, and Admin account. Admins can view workspace details, rename a
-workspace, inspect its departments and members, and see database-backed member,
-department, and document totals.
-
-### Document upload and processing
-
-The Upload Documents page accepts PDF, DOCX, XLSX, and TXT files. The upload
-status shows the ingestion stages, including page parsing, chunking, embedding,
-and indexing. Members see documents available to their role and department.
-Admins and permitted users can remove indexed documents from the interface.
-
-Uploaded originals are retained in a private storage location to enable PDF
-preview. Docker Compose uses the `document_uploads` named volume; a backend run
-directly on Windows uses `apps/backend/uploads/`, which is ignored by Git.
-Deleting a document removes its indexed chunks, database record, and retained
-original. Older indexed documents whose original file was not retained must
-be re-uploaded before a PDF preview can be opened.
-
-### Search, citations, and history
-
-Search retrieves authorized passages, reranks them, generates a concise answer,
-and returns citations. Search shows the active question and processing stage;
-it does not display private model reasoning. Source citations identify their
-document and page. For a retained PDF, **Preview PDF at page N** opens the
-original at the cited page. DOCX, XLSX, and TXT citations do not have a PDF
-preview.
-
-Questions and completed answers are stored per user in PostgreSQL and restored
-when Search is reopened. The conversation keeps the newest exchange at the
-bottom; the message history scrolls independently, while the composer stays
-fixed at the bottom of the Search view.
-
-### Supported input formats
-
-| Format | Current extraction support |
-| --- | --- |
-| PDF | Text-based PDFs; scanned/image-only pages fall back to EasyOCR before ColPali routing |
-| DOCX | Word paragraphs and tables |
-| XLSX | Spreadsheet content |
-| TXT | Plain text |
-
-PPTX and CSV are not currently supported.
-
-### Google Drive import
-
-The backend can connect a Google Drive account, list PDF/DOCX/XLSX/TXT files,
-and import them into a workspace with a per-file role list. There is no
-frontend for this yet - it is currently API-only. See
-[Google Drive integration](#google-drive-integration).
-
-
-## Architecture and data
+## Architecture
 
 ```text
 Browser
-  └── React + Vite frontend ── http://localhost:5173
-       └── Express backend ─── http://localhost:5000
-            ├── PostgreSQL ── accounts, workspaces, documents, chat history
-            └── FastAPI AI ── http://localhost:8000
-                 ├── Qdrant ── indexed passages and vectors
-                 └── Ollama ── local llama3.2:3b model
+  └── React + Vite frontend :5173
+       └── Express + Prisma backend :5000
+            ├── PostgreSQL :5432
+            └── FastAPI AI service :8000
+                 ├── Qdrant :6333
+                 ├── Ollama :11434
+                 └── Optional visual AI service :8001
 ```
 
-| Service | Responsibility | Host port |
-| --- | --- | ---: |
-| Frontend | React application and UI | 5173 |
-| Backend | Authentication, workspace administration, document APIs, AI proxy, Google Drive | 5000 |
-| PostgreSQL | Accounts, workspace records, document metadata, answer history | 5432 |
-| AI service | Ingestion, retrieval, reranking, generation, citations | 8000 |
-| Visual AI service | ColPali page embedding, Qwen2-VL visual QA (`ai` profile, GPU) | 8001 |
-| Qdrant | Document chunks and vector search | 6333 |
-| Ollama | Local language model runtime | 11434 |
+The text AI pipeline parses and chunks PDF, DOCX, XLSX, and TXT files; indexes
+authorized chunks in Qdrant; retrieves and reranks relevant content; and asks a
+local Ollama model to produce an answer with citations. The visual service
+provides a separate scanned-page pipeline using ColPali and Qwen2-VL.
 
-The visual AI service lives in `apps/ai-service-visual` and is part of the
-Compose `ai` profile with its own Dockerfile. It reserves one NVIDIA GPU and
-runs when the `ai` profile is enabled; scanned PDFs are forwarded to it
-automatically during ingestion. See
-[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md).
+| Service | Host port | Purpose |
+| --- | ---: | --- |
+| Frontend | 5173 | React application |
+| Backend | 5000 | Authentication, workspace and document APIs, AI proxy |
+| PostgreSQL | 5432 | Accounts, workspace/document metadata, answer history |
+| Text AI service | 8000 | Ingestion, retrieval, generation and citations |
+| Qdrant | 6333 | Text and visual document indexes |
+| Ollama | 11434 | Local `llama3.2:3b` language model |
+| Visual AI service | 8001 | Optional scanned-page ingestion and visual QA |
 
-The AI service, the visual AI service, Qdrant, and Ollama are in the Compose
-`ai` profile. The
-backend validates JWTs and supplies organization, workspace, department, and
-role context to protected operations. Retrieval applies these access fields
-before returning passages.
-
-Docker Compose persists PostgreSQL, Qdrant, Ollama models, and original
-uploads in named volumes. `docker compose down` keeps those volumes.
-`docker compose down -v` removes them, including user data, indexed content,
-answer history, retained uploads, and model weights.
-
-## Start with Docker Desktop
+## Run everything with Docker
 
 ### Requirements
 
-- Windows 10/11 with Docker Desktop using the Linux/WSL 2 engine.
-- Git and a browser.
-- Internet access for initial image, package, model, and embedding/reranking
-  model downloads.
-- Several gigabytes of disk space for AI dependencies and model weights.
+- Windows 10/11 with Docker Desktop using its Linux/WSL 2 engine.
+- Git and a web browser.
+- Internet access and several GB of free space for images, Python dependencies,
+  and model files.
+- NVIDIA GPU support configured for Docker if you want to start the optional
+  visual service in the Compose `ai` profile.
 
-Node.js and Python do not need to be installed on Windows when using Compose.
+Node.js and Python are not required on the host for the Compose setup.
 
-### 1. Clone and open the repository
+### Start
 
-In PowerShell:
+From PowerShell, at the repository root:
 
 ```powershell
-git clone https://github.com/Jnanamithran/ekip-platform.git
-Set-Location ekip-platform
 docker info
-docker compose version
 ```
 
-Docker Desktop must be running before you start the stack.
-
-### 2. Set the root JWT secret
-
-Create a private `.env` file in the repository root with a random
-`JWT_SECRET`. For example:
+Compose requires a private root `.env` file with a `JWT_SECRET`. Create one if
+you do not already have it; this command leaves an existing file untouched:
 
 ```powershell
-$bytes = New-Object byte[] 32
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($bytes)
-$secret = [Convert]::ToBase64String($bytes)
-$rng.Dispose()
-Set-Content -Path .env -Value "JWT_SECRET=$secret" -Encoding ASCII
+if (-not (Test-Path .env)) {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($bytes)
+    $secret = [Convert]::ToBase64String($bytes)
+    $rng.Dispose()
+    Set-Content -Path .env -Value "JWT_SECRET=$secret" -Encoding ASCII
+}
 ```
 
-Do not commit `.env` or share its secret. `.env` is ignored by Git.
-
-### 3. Build and start all services
+Build and start the full Compose profile:
 
 ```powershell
 docker compose --profile ai up --build -d
 docker compose ps
 ```
 
-The backend applies pending Prisma migrations at startup. Wait for PostgreSQL
-and the backend health checks to report healthy. AI images and Python
-dependencies can take several minutes to build for the first time.
-
-### 4. Download the Ollama model
-
-Download the configured model into its persistent volume:
+The first build can take several minutes. After Ollama starts, download the
+configured model into its persistent volume:
 
 ```powershell
 docker compose exec ollama ollama pull llama3.2:3b
-docker compose exec ollama ollama list
 ```
 
-Model downloads are needed once per Ollama data volume. The AI service may also
-download embedding and reranking model weights on its first run.
+Wait for PostgreSQL and the backend to become healthy, then open
+<http://localhost:5173/signup>. The full `ai` profile includes the visual AI
+service, whose Compose configuration requests an NVIDIA GPU. If your Docker
+installation cannot provide one, the profile may fail to start; see the
+deployment handbook for troubleshooting and options.
 
-### 5. Open EKIP
+### Stop and inspect
 
-- Signup: <http://localhost:5173/signup>
-- Login: <http://localhost:5173/login>
-- Backend health: <http://localhost:5000/health>
-- AI health: <http://localhost:8000/health>
-- Qdrant dashboard: <http://localhost:6333/dashboard>
+```powershell
+docker compose ps
+docker compose logs --tail 100
+docker compose logs --tail 100 backend
+docker compose down
+```
 
-After signup, upload documents before asking questions about their content.
+`docker compose down` preserves named volumes. **Do not use
+`docker compose down -v` unless you intend to delete the database, indexed
+content, retained uploads, and downloaded Ollama models.**
 
-## Create an account and use EKIP
+## Run application code locally without Docker
 
-1. Open Signup and create an organization, workspace, department, and first
-   Admin account.
-2. Sign in using that Admin account.
-3. Upload a supported document and wait until indexing completes.
-4. Ask a question on Search. The current processing stage is displayed while
-   the system works. Use **Clear chat** to erase your saved question history.
-5. Open a citation’s source to inspect its excerpt, then select **Preview PDF
-   at page N** when the original PDF is available.
-6. Open Workspace Settings to review the workspace overview, member list,
-   department/document totals, and rename the workspace.
+This runs the frontend, backend, and AI application processes directly on
+Windows. You still need local installations of PostgreSQL, Qdrant, and Ollama;
+this guide does not use containers for those dependencies. Install PostgreSQL,
+create a database named `ekip`, and start PostgreSQL, Qdrant, and Ollama so they
+are reachable on their default ports. Then fetch the model:
 
-Only Admin users can open Workspace Settings and Manage Users. Workspace
-member, department, and document counts come from PostgreSQL.
+```powershell
+ollama pull llama3.2:3b
+```
 
-The Manage Users page is currently a **read-only list**. The backend supports
-creating, editing, deactivating, reactivating users and resetting passwords,
-but those controls are not exposed in the UI yet.
-
-Uploads currently set the document's role list to the uploader's own role.
-Per-document multi-role access is only reachable through the Google Drive
-import API.
-
-## Run services locally
-
-This development setup runs PostgreSQL, Qdrant, and Ollama in Docker while
-running the application code on Windows. Do not run Docker and local versions
-of the same frontend/backend services at the same time; both use the same host
+Run each application in its own PowerShell window. Do not also start the
+corresponding Compose application services, because they use the same host
 ports.
 
-### 1. Start infrastructure
+### Backend
 
-From the repository root:
+From the repository root, in PowerShell:
 
 ```powershell
-docker compose --profile ai up -d postgres qdrant ollama
-docker compose exec ollama ollama pull llama3.2:3b
+Set-Location .\apps\backend
 ```
 
-### 2. Configure and start the backend
-
-Create `apps/backend/.env` with a private JWT secret and a database URL for
-local Windows access:
+Create `.env` in the current directory (`apps/backend/.env` in the repository)
+with your PostgreSQL password and a private JWT secret:
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ekip?schema=public
-JWT_SECRET=replace-with-a-private-random-secret
+DATABASE_URL="postgresql://postgres:YOUR_POSTGRES_PASSWORD@localhost:5432/ekip?schema=public"
+JWT_SECRET=replace-with-a-long-private-random-secret
 PORT=5000
 AI_SERVICE_URL=http://localhost:8000
 QDRANT_URL=http://localhost:6333
@@ -254,22 +154,22 @@ UPLOAD_STORAGE_DIR=uploads
 FRONTEND_ORIGINS=http://localhost:5173
 ```
 
-Then run:
+Install dependencies, generate Prisma Client, apply migrations, and run the
+development server:
 
 ```powershell
-Set-Location apps/backend
 npm ci
 npx prisma generate --schema src/prisma/schema.prisma
 npx prisma migrate deploy --schema src/prisma/schema.prisma
 npm run dev
 ```
 
-### 3. Configure and start the AI service
+### Text AI service
 
 In another PowerShell window:
 
 ```powershell
-Set-Location apps/ai-service
+Set-Location .\apps\ai-service
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -277,131 +177,65 @@ pip install -r requirements.txt
 $env:QDRANT_URL = "http://localhost:6333"
 $env:OLLAMA_URL = "http://localhost:11434"
 $env:BACKEND_URL = "http://localhost:5000"
+$env:VISUAL_SERVICE_URL = "http://localhost:8001"
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 4. Configure and start the frontend
+The text pipeline can run without the visual service. Scanned PDFs requiring
+visual indexing need that additional service and compatible hardware.
 
-In another PowerShell window:
+### Frontend
+
+In a third PowerShell window:
 
 ```powershell
-Set-Location apps/frontend
+Set-Location .\apps\frontend
 npm ci
 ```
 
-Create `apps/frontend/.env`:
-
-```dotenv
-VITE_API_URL=http://127.0.0.1:5000
-```
-
-Start Vite:
+Set `VITE_API_URL=http://localhost:5000` in `apps/frontend/.env` if the
+existing environment file does not already point to the local backend, then
+start Vite:
 
 ```powershell
 npm run dev
 ```
 
-Open <http://localhost:5173>. Port 5173 is the frontend port both locally and
-in Docker Compose. The browser calls the backend on port 5000.
+Open <http://localhost:5173/signup>.
 
-### Optional: the visual AI service
+## Use EKIP
 
-The visual service is not needed for the text pipeline. It starts with the
-rest of the `ai` profile (`docker compose --profile ai up`) and reserves an
-NVIDIA GPU, so it requires the NVIDIA Container Toolkit on the host. For
-manual setup and VRAM notes, see
-[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#running-the-services).
+1. Create an organization, workspace, department, and first Admin account on
+   the Signup page.
+2. Sign in and upload a PDF, DOCX, XLSX, or TXT file.
+3. Wait for processing/indexing to finish, then ask a question on Search.
+4. Review source citations. PDF page previews are available when an original
+   PDF is retained.
+5. Admins can review workspace settings and manage users. The backend also
+   provides a Google Drive integration; connect and import supported files from
+   the Integrations page.
 
-### Host and container addresses
+## Configuration
 
-Within the Compose network, use service names:
-
-- Backend → PostgreSQL: `postgres:5432`
-- Backend → AI service: `ai-service:8000`
-- AI service → Qdrant: `qdrant:6333`
-- AI service → Ollama: `ollama:11434`
-- AI service → backend progress API: `backend:5000`
-- AI service → visual AI service: `ai-service-visual:8001`
-
-On Windows, local processes use `localhost`/`127.0.0.1` and the published host
-ports. The browser's `VITE_API_URL` must point to the host backend, not the
-Compose-only service name.
-
-## Configuration and ports
-
-| Setting | Used by | Purpose |
+| Variable | Used by | Purpose |
 | --- | --- | --- |
-| `JWT_SECRET` | Backend | Signs and verifies access tokens |
+| `JWT_SECRET` | Backend | Signs access tokens |
 | `DATABASE_URL` | Backend / Prisma | PostgreSQL connection string |
-| `AI_SERVICE_URL` | Backend | AI service base URL |
-| `QDRANT_URL` | Backend and AI service | Qdrant endpoint |
-| `OLLAMA_URL` | AI service | Ollama endpoint |
-| `BACKEND_URL` | AI service | Reports processing stages |
-| `UPLOAD_STORAGE_DIR` | Backend | Private retained originals |
+| `AI_SERVICE_URL` | Backend | Text AI service address |
+| `QDRANT_URL` | Backend and AI services | Qdrant address |
+| `OLLAMA_URL` | Text AI service | Ollama address |
+| `BACKEND_URL` | Text AI service | Reports processing progress |
 | `FRONTEND_ORIGINS` | Backend | Allowed browser origin(s) |
-| `VITE_API_URL` | Frontend build/dev server | Backend URL used by the browser |
+| `VITE_API_URL` | Frontend | Backend address used by the browser |
+| `VISUAL_SERVICE_URL` | Text AI service | Optional visual AI address |
 
-Do not publish secrets in source code, issue reports, or screenshots.
+Example files are provided in the individual application directories. Never
+commit `.env` files, credentials, or API keys.
 
-The AI service also reads `VISUAL_SERVICE_URL` (default
-`http://ai-service-visual:8001`) to forward scanned PDFs and run visual
-queries, and `VISUAL_INGEST_TIMEOUT` (default 120 s) for that forward call.
-The visual service reads `COLPALI_MODEL`, `QWEN_MODEL`, `RENDER_DPI` and
-`VISUAL_STORAGE`.
+Google Drive OAuth is optional and requires a Google OAuth client. See
+[Google Drive integration](docs/06_Backend_Handbook.md#google-drive-apis).
 
-## Google Drive integration
-
-The backend can import documents from a connected Google Drive account. This
-is **API-only at present** - there is no `/integrations` page in the frontend
-yet, so the flow must be driven with an HTTP client or `curl`.
-
-All routes require an access token and the `Admin` or `Manager` role, except
-the OAuth callback.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/integrations/google/connect` | Returns the Google sign-in URL to open |
-| `GET` | `/integrations/google/callback` | Google redirects here; exchanges the code |
-| `GET` | `/integrations/google/status` | `{ "connected": true \| false }` |
-| `GET` | `/integrations/google/files` | Lists PDF/DOCX/XLSX/TXT files, not trashed |
-| `POST` | `/integrations/google/import` | Imports 1-5 files with per-file role lists |
-| `DELETE` | `/integrations/google/disconnect` | Deletes the stored connection |
-
-The import body is `{ "files": [{ "file_id", "allowed_roles": ["Admin", "Manager"] }] }`.
-`allowed_roles` must be a non-empty list of valid roles and must include the
-importer's own role. File names and types come from Drive, never from the
-request body. Files over 50 MB are skipped, and one file failing does not fail
-the others.
-
-Drive's own permissions are ignored - EKIP's RBAC applies. Imported files go
-through the same ingestion path as a normal upload, and the same role list is
-saved in Postgres and sent to the AI service for the Qdrant chunks.
-
-### Setup
-
-1. Create an OAuth client in Google Cloud Console (Web application, redirect URI
-   `http://localhost:5000/integrations/google/callback`) and add testers on the
-   consent screen.
-2. Add these to `apps/backend/.env` (and to the Compose `backend` service
-   environment, which does not set them for you):
-
-```dotenv
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_REDIRECT_URI=http://localhost:5000/integrations/google/callback
-TOKEN_ENCRYPTION_KEY=64-hex-characters
-OAUTH_STATE_SECRET=64-hex-characters
-```
-
-Generate the two secrets with
-`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-
-Google tokens are encrypted at rest with AES-256-GCM using
-`TOKEN_ENCRYPTION_KEY`. In Google's Testing mode a refresh token expires after
-7 days; the API then returns `GOOGLE_RECONNECT_REQUIRED`.
-
-
-## Development and validation
+## Tests and checks
 
 Frontend build and lint:
 
@@ -410,161 +244,46 @@ npm --prefix apps/frontend run build
 npm --prefix apps/frontend run lint
 ```
 
-Backend JavaScript syntax checks:
+Backend tests and Prisma checks:
 
 ```powershell
-Set-Location apps/backend
-node --check src/controllers/admin.controller.js
-node --check src/controllers/ai.controller.js
-node --check src/routes/admin.routes.js
-node --check src/routes/ai.routes.js
-```
-
-Prisma checks:
-
-```powershell
-Set-Location apps/backend
+Set-Location .\apps\backend
+npm ci
+npm test
 npx prisma validate --schema src/prisma/schema.prisma
-npx prisma generate --schema src/prisma/schema.prisma
 ```
 
-AI service tests (install the project requirements and pytest in the active
-Python environment if needed):
+AI service tests:
 
 ```powershell
-Set-Location apps/ai-service
+Set-Location .\apps\ai-service
 python -m pytest tests -q
 ```
 
-The current result is **13 passed offline; 4 modules require the running
-stack**. `test_citations.py`, `test_generation.py`, `test_hybrid.py` and
-`test_reranker.py` call Qdrant at module import time and need the Compose `ai`
-profile stack running - see [Known issues](#known-issues).
+Some AI tests use live Qdrant or Ollama dependencies; check their fixtures and
+test markers before running them without those services. See
+[AI Handbook: tests](docs/08_AI_Handbook.md#tests).
 
-Useful Compose commands from the repository root:
+## Known limitations
 
-```powershell
-docker compose ps
-docker compose logs --tail 100 backend
-docker compose logs --tail 100 ai-service
-docker compose logs --tail 100 frontend
-docker compose down
-```
+- This is a prototype; production deployment, operational monitoring, backup
+  and recovery, and independent security review are not complete.
+- Scanned-PDF visual processing requires the optional visual model stack and
+  substantial compute resources. Text extraction/OCR behavior depends on the
+  document and installed model/runtime support.
+- Supported upload formats are PDF, DOCX, XLSX, and TXT. PPTX and CSV are not
+  supported.
+- Google Drive import uses EKIP role-based permissions; it does not preserve
+  Drive sharing permissions.
+- PDF preview requires the original file to be retained. Other supported
+  formats provide text citations, not PDF previews.
 
-## Known issues
+## Project documentation
 
-The AI-service blockers found during the documentation audit have been
-resolved: the missing `MatchValue` import (PR #97), the four test modules that
-broke pytest collection (PR #98), the `/ask` 500 on a missing visual
-collection (now returns "no visual documents"), and the unwired visual
-pipeline (scanned PDFs are now forwarded to the visual service during
-ingestion). Full detail is in
-[`docs/08_AI_Handbook.md`](./docs/08_AI_Handbook.md#known-issues-and-blockers).
-
-### 1. `tests/demo.py` still uses the old `RBACContext` shape
-
-It is not collected by pytest, but running it directly raises a pydantic
-`ValidationError` because `allowed_roles` is missing.
-
-### 2. Four AI-service test modules need the running stack
-
-`test_citations.py`, `test_generation.py`, `test_hybrid.py` and
-`test_reranker.py` call Qdrant at module import time, so they fail with
-connection errors unless the Compose `ai` profile stack is up.
-
-### 3. Large scanned PDFs can outlive the visual-ingest timeout
-
-The forward call to `/visual/ingest` uses `VISUAL_INGEST_TIMEOUT` (default
-120 s). A timeout is non-fatal - the document is still text-indexed - but it
-skips visual indexing for that document; raise the timeout for large scans.
-
-### 4. Frontend gaps
-
-- No Google Drive page - the backend integration is unreachable from the UI.
-- Manage Users is read-only; create/edit/deactivate/reset-password have no
-  UI.
-- No multi-role control on upload; every uploaded document is visible only to
-  the uploader's role.
-
-
-## Troubleshooting
-
-### Port 5173, 5000, or another service port is already in use
-
-Only run one frontend and one backend on each host port at a time. Stop the
-duplicate local process from its own terminal, or stop the corresponding
-Compose service before starting the local version. Do not terminate a process
-unless you have confirmed what it is.
-
-### The frontend cannot connect to the backend
-
-Check that the backend is running on port 5000 and that `VITE_API_URL` points
-to `http://127.0.0.1:5000` (or `http://localhost:5000`). The configured
-`FRONTEND_ORIGINS` must include `http://localhost:5173`.
-
-```powershell
-curl.exe http://127.0.0.1:5000/health
-docker compose ps
-docker compose logs --tail 100 backend
-```
-
-### Search or upload says the AI service is unavailable
-
-Start the `ai` profile and check AI service, Ollama, and Qdrant logs:
-
-```powershell
-docker compose --profile ai up -d
-docker compose ps
-docker compose logs --tail 100 ai-service ollama qdrant
-docker compose exec ollama ollama list
-```
-
-If the model is missing, run `docker compose exec ollama ollama pull
-llama3.2:3b`.
-
-### Search fails with a 500
-
-Check the AI service log first. The two defects that used to cause 500s on
-the search path (the missing `MatchValue` import and the missing visual
-collection) are fixed; remaining causes are usually Ollama or Qdrant being
-down. A failed visual ingest is logged in the AI service but never fails the
-request.
-
-```powershell
-docker compose logs --tail 100 ai-service
-```
-
-### A PDF citation cannot be previewed
-
-Preview requires a retained original PDF. Older indexed documents may have
-chunks in Qdrant but no original file; re-upload the PDF to enable preview.
-Only authorized users can fetch a retained PDF.
-
-### Prisma reports a missing `DATABASE_URL`
-
-Compose supplies the database URL inside the backend container. A Prisma
-command run directly on Windows does not inherit Compose variables; create
-`apps/backend/.env` with the local connection settings in
-[Run services locally](#run-services-locally).
-
-### Remove all local Docker data
-
-`docker compose down` stops and removes containers but leaves named volumes.
-`docker compose down -v` permanently deletes database rows, indexed vectors,
-retained uploads, and Ollama model files. Use it only when you intentionally
-want a full local reset.
-
-## Project layout
-
-```text
-ekip-platform/
-├── apps/
-│   ├── frontend/          # React, Vite, Tailwind
-│   ├── backend/           # Express API, JWT auth, Prisma schema/migrations
-│   ├── ai-service/        # FastAPI, ingestion, retrieval, citations, generation
-│   └── ai-service-visual/ # FastAPI, ColPali + Qwen2-VL (Compose `ai` profile, GPU)
-├── docs/                  # Deployment and project documentation
-├── docker-compose.yml     # Local service stack and persistent volumes
-├── PROJECT_PROGRESS.md    # Current project status
-└── README.md
-```
+- [Project progress](PROJECT_PROGRESS.md)
+- [Project handbook](docs/01_Project_Handbook.md)
+- [System architecture](docs/05_System_Architecture.md)
+- [Backend handbook](docs/06_Backend_Handbook.md)
+- [AI handbook](docs/08_AI_Handbook.md)
+- [Deployment handbook](docs/10_Deployment_Handbook.md)
+- [Project roadmap](docs/11_Project_Roadmap.md)
