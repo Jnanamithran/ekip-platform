@@ -31,24 +31,7 @@ These are the field names agreed with the AI service.
 - 200: `{ "access_token": "...", "refresh_token": "..." }`
 - 400: email or password missing
 - 401: invalid email or password (same message for both cases)
-- 423: non-Admin account locked after 5 failed attempts; `locked_until` gives the retry time
 - 403: account deactivated (`code: "ACCOUNT_DEACTIVATED"`), returned only after the correct password
-
-Login failures are rate-limited by IP + email and by IP (5 failed attempts per
-15 minutes by default). Admin accounts use rate limiting only; their failed
-password attempts do not lock the account. Successful login clears the failed
-attempt count and lock time.
-
-**POST /auth/change-password** (requires access token)
-- Body: `{ "currentPassword": "...", "newPassword": "..." }`
-- 200: `{ "message": "Password changed successfully." }`; all refresh tokens for the user are revoked
-- 400: fields missing or new password does not meet policy
-- 401: current password is incorrect
-- 404: user not found
-
-New passwords require at least 8 characters, an uppercase letter, a lowercase
-letter, a number, no more than 72 UTF-8 bytes, and must not be in the common
-password list.
 
 **POST /auth/refresh**
 - Body: `{ "refresh_token": "..." }`
@@ -68,7 +51,7 @@ password list.
 
 **POST /admin/users** (Admin only)
 - Body: `{ "email", "password", "role", "department_id" }`
-- Rules: valid email, password meeting the password policy, `role` must be one of the four roles, and `department_id` must belong to the admin's own organization.
+- Rules: valid email, password of at least 8 characters, `role` must be one of the four roles, and `department_id` must belong to the admin's own organization.
 - 201: `{ "user": { id, email, role, department_id } }` (the password hash is never returned)
 - 400: invalid or missing fields
 - 401: no or invalid token
@@ -88,7 +71,7 @@ All four routes only act on users inside the admin's own organization. A user in
 - 409: email already in use
 
 **POST /admin/users/:id/reset-password**
-- 200: `{ "temp_password", "message" }`. The password is random (`crypto.randomBytes`). All of the user's refresh tokens are deleted, and any account lock is cleared.
+- 200: `{ "temp_password", "message" }`. The password is random (`crypto.randomBytes`). All of the user's refresh tokens are deleted, so they are logged out everywhere.
 - 404: user not found
 
 **PATCH /admin/users/:id/deactivate**
@@ -182,7 +165,7 @@ Limits protect login and the AI service from abuse. When a limit is hit, the res
 | Endpoint | Limit | Counted per | Env variable |
 |---|---|---|---|
 | POST /auth/login | 5 failed / 15 min | IP + email (successful logins are not counted) | `RATE_LIMIT_LOGIN_MAX` |
-| POST /auth/login | 5 failed / 15 min | IP | `RATE_LIMIT_LOGIN_IP_MAX` |
+| POST /auth/login | 30 failed / 15 min | IP | `RATE_LIMIT_LOGIN_IP_MAX` |
 | POST /auth/refresh | 20 / min | IP | `RATE_LIMIT_REFRESH_MAX` |
 | POST /organizations | 3 / hour | IP | `RATE_LIMIT_SIGNUP_MAX` |
 | POST /ai/ask | 30 / min | user | `RATE_LIMIT_QUERY_MAX` |
