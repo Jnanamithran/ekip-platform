@@ -21,7 +21,7 @@ from ingestion.schema import FileType
 from chunking.service import chunk_document
 
 from embeddings.qdrant_client import get_client
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 app = FastAPI(title='EKIP AI Service', version='0.1.0')
