@@ -10,6 +10,7 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - BACKEND_URL=http://backend:5000
       - VISUAL_SERVICE_URL=http://ai-service-visual:8001
+      - AI_SERVICE_API_KEY=${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in the project root .env file}
     depends_on:
       - qdrant
       - ollama
@@ -24,6 +25,7 @@ services:
       - "8001:8001"
     environment:
       - QDRANT_URL=http://qdrant:6333
+      - AI_SERVICE_API_KEY=${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in the project root .env file}
     volumes:
       - document_uploads:/app/uploads
     depends_on:
@@ -45,6 +47,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ekip
       - AI_SERVICE_URL=http://ai-service:8000
+      - AI_SERVICE_API_KEY=${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in the project root .env file}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in the project root .env file}
       - QDRANT_URL=http://qdrant:6333
       - FRONTEND_ORIGINS=http://localhost:5173

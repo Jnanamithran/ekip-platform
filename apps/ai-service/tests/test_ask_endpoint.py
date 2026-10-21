@@ -58,6 +58,7 @@ def test_unexpected_visual_collection_error_is_not_swallowed(monkeypatch):
 
 
 def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
+    monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
     reported_stages = []
 
     async def fake_report_progress(token, endpoint, **details):
@@ -101,6 +102,7 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
             'token': 'test-token',
             'request_id': 'test-request-1',
         },
+        headers={'x-ekip-service-key': 'test-service-key-12345678901234567890'},
     )
 
     assert response.status_code == 200
@@ -118,3 +120,24 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
         'Drafting an answer from the selected passages',
         'Checking the answer and its source citations',
     ]
+
+
+def test_ask_rejects_requests_without_backend_service_key(monkeypatch):
+    monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
+
+    response = TestClient(main.app).post(
+        '/ask',
+        json={
+            'query': 'What does the document say?',
+            'rbac': {
+                'org_id': 'org-1',
+                'workspace_id': 'workspace-1',
+                'department_id': 'department-1',
+                'role_id': 'role-admin',
+            },
+            'token': 'test-token',
+            'request_id': 'test-request-unauthorized',
+        },
+    )
+
+    assert response.status_code == 401

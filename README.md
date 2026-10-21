@@ -69,8 +69,8 @@ From PowerShell, at the repository root:
 docker info
 ```
 
-Compose requires a private root `.env` file with a `JWT_SECRET`. Create one if
-you do not already have it; this command leaves an existing file untouched:
+Compose requires a private root `.env` file with a `JWT_SECRET` and
+`AI_SERVICE_API_KEY`. For a new setup, create both values with:
 
 ```powershell
 if (-not (Test-Path .env)) {
@@ -78,10 +78,16 @@ if (-not (Test-Path .env)) {
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     $rng.GetBytes($bytes)
     $secret = [Convert]::ToBase64String($bytes)
+    $rng.GetBytes($bytes)
+    $aiKey = [Convert]::ToBase64String($bytes)
     $rng.Dispose()
-    Set-Content -Path .env -Value "JWT_SECRET=$secret" -Encoding ASCII
+    Set-Content -Path .env -Value "JWT_SECRET=$secret`nAI_SERVICE_API_KEY=$aiKey" -Encoding ASCII
 }
 ```
+
+If `.env` already exists, add a separately generated random
+`AI_SERVICE_API_KEY` value to it before starting Compose. Keep this key private;
+the backend and both AI services use it to authenticate internal requests.
 
 Build and start the full Compose profile:
 
@@ -168,6 +174,7 @@ when available, otherwise marks the first existing department; it creates a
 | `JWT_SECRET` | Backend | Signs access tokens |
 | `DATABASE_URL` | Backend / Prisma | PostgreSQL connection string |
 | `AI_SERVICE_URL` | Backend | Text AI service address |
+| `AI_SERVICE_API_KEY` | Backend, text AI, visual AI | Shared key for service-to-service authentication |
 | `QDRANT_URL` | Backend and AI services | Qdrant address |
 | `OLLAMA_URL` | Text AI service | Ollama address |
 | `BACKEND_URL` | Text AI service | Reports processing progress |

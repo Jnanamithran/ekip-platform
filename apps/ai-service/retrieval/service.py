@@ -50,6 +50,7 @@ def _dense_search(
 
     conditions = [
         FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
+        FieldCondition(key="workspace_id", match=MatchValue(value=rbac.workspace_id)),
     ]
     if not rbac.is_owner:
         department_ids = rbac.department_ids or [rbac.department_id]

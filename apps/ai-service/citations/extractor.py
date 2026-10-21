@@ -93,18 +93,6 @@ _SOURCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Detect "no answer" responses — model said it couldn't find the answer
-_NO_ANSWER_PHRASES = [
-    "i could not find",
-    "no information",
-    "not mentioned",
-    "not provided",
-    "cannot find",
-    "does not contain",
-    "no clear answer",
-]
-
-
 def _parse_source_numbers(match_text: str) -> List[int]:
     """Extract all source numbers from a [SOURCE N] match string."""
     numbers = []
@@ -120,12 +108,6 @@ def _parse_source_numbers(match_text: str) -> List[int]:
             digits = re.findall(r'\d+', part)
             numbers.extend(int(d) for d in digits)
     return numbers
-
-
-def _is_no_answer(answer: str) -> bool:
-    """Check if the model indicated it couldn't find an answer."""
-    lower = answer.lower()
-    return any(phrase in lower for phrase in _NO_ANSWER_PHRASES)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -192,5 +174,5 @@ def extract_citations(result: GenerationResult, query: str) -> CitedAnswer:
         citations  = citations,
         model      = result.model,
         query      = query,
-        has_answer = not _is_no_answer(answer),
+        has_answer = bool(citations),
     )

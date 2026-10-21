@@ -14,6 +14,9 @@ const {
 
 // AI service base URL (set via env in Docker; default to localhost for dev)
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const AI_SERVICE_HEADERS = process.env.AI_SERVICE_API_KEY
+  ? { 'x-ekip-service-key': process.env.AI_SERVICE_API_KEY }
+  : {};
 const QDRANT_URL = process.env.QDRANT_URL || 'http://localhost:6333';
 const DOCUMENT_MIME_TYPES = {
   pdf: 'application/pdf',
@@ -94,7 +97,10 @@ async function ask(req, res) {
 
     failureMessage = 'Failed to reach AI service';
     const resp = await axios.post(url, payload, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...AI_SERVICE_HEADERS,
+      },
     });
 
     // Transform the AI service's citation shape to match the frontend contract
@@ -323,7 +329,7 @@ async function ingestDocument({
     form.append('file', buffer, { filename, contentType: mimetype });
 
     const resp = await axios.post(`${AI_SERVICE_URL}/ingest`, form, {
-      headers: { ...form.getHeaders() },
+      headers: { ...form.getHeaders(), ...AI_SERVICE_HEADERS },
       timeout: 10 * 60 * 1000,
     });
 
@@ -339,7 +345,11 @@ async function ingestDocument({
 
     return {
       status: 200,
-      body: { ...resp.data, document_id: document.id, preview_available: fileType === 'pdf' },
+      body: {
+        ...resp.data,
+        document_id: document.id,
+        preview_available: Boolean(DOCUMENT_MIME_TYPES[fileType]),
+      },
     };
   } catch (err) {
     console.error('[ai] /ingest failed:', err.message);
@@ -427,7 +437,7 @@ async function deleteDocumentVectors(collection, documentId, orgId) {
   }
 }
 
-async function setDocumentVectorAccess(collection, documentId, orgId, roleIds) {
+async function setDocumentVectorAccess(collection, documentId, orgId, roleIds, departmentId) {
   try {
     await axios.get(`${QDRANT_URL}/collections/${collection}`);
   } catch (err) {
@@ -437,7 +447,10 @@ async function setDocumentVectorAccess(collection, documentId, orgId, roleIds) {
   const response = await axios.post(
     `${QDRANT_URL}/collections/${collection}/points/payload?wait=true`,
     {
-      payload: { allowed_role_ids: roleIds },
+      payload: {
+        allowed_role_ids: roleIds,
+        ...(departmentId ? { department_id: departmentId } : {}),
+      },
       filter: {
         must: [
           { key: 'document_id', match: { value: documentId } },
@@ -454,9 +467,6 @@ async function setDocumentVectorAccess(collection, documentId, orgId, roleIds) {
 async function updateDocumentAccess(req, res) {
   const { id } = req.params;
   const { allowed_role_ids: allowedRoleIds } = req.body || {};
-  const access = await validateAllowedRoleIds(prisma, allowedRoleIds, req.user);
-  if (access.error) return res.status(400).json({ error: access.error });
-
   try {
     const document = await prisma.document.findFirst({
       where: { id, ...documentAccessWhere(req.user, { manageAccess: true }) },
@@ -466,22 +476,53 @@ async function updateDocumentAccess(req, res) {
     if (document.status === 'Processing') {
       return res.status(409).json({ error: 'Wait for processing to finish before changing access' });
     }
+    const access = await validateAllowedRoleIds(prisma, allowedRoleIds, req.user);
+    if (access.error) return res.status(400).json({ error: access.error });
+    let targetDepartmentId = document.department_id;
+    if (req.body?.department_id !== undefined) {
+      const department = await validateDocumentDepartment(
+        prisma,
+        req.user,
+        req.body.department_id
+      );
+      if (department.error) {
+        return res.status(department.status).json({ error: department.error });
+      }
+      targetDepartmentId = department.departmentId;
+    }
 
     for (const collection of ['ekip_documents', 'ekip_visual_documents']) {
       await setDocumentVectorAccess(collection, id, req.user.org_id, []);
     }
 
-    await prisma.$transaction([
+    const updates = [
       prisma.documentRoleAccess.deleteMany({ where: { document_id: id } }),
       prisma.documentRoleAccess.createMany({
         data: access.roleIds.map((role_id) => ({ document_id: id, role_id })),
       }),
-    ]);
+    ];
+    if (targetDepartmentId !== document.department_id) {
+      updates.push(prisma.document.update({
+        where: { id },
+        data: { department_id: targetDepartmentId },
+      }));
+    }
+    await prisma.$transaction(updates);
 
     for (const collection of ['ekip_documents', 'ekip_visual_documents']) {
-      await setDocumentVectorAccess(collection, id, req.user.org_id, access.roleIds);
+      await setDocumentVectorAccess(
+        collection,
+        id,
+        req.user.org_id,
+        access.roleIds,
+        targetDepartmentId
+      );
     }
-    return res.json({ updated: true, allowed_role_ids: access.roleIds });
+    return res.json({
+      updated: true,
+      allowed_role_ids: access.roleIds,
+      department_id: targetDepartmentId,
+    });
   } catch (err) {
     console.error('[ai] document access update failed:', err.message);
     return res.status(500).json({ error: 'Failed to update document access; re-index the document if search access is incomplete' });
@@ -578,7 +619,7 @@ async function reindexDocument(req, res) {
       });
 
       const response = await axios.post(`${AI_SERVICE_URL}/ingest`, form, {
-        headers: { ...form.getHeaders() },
+        headers: { ...form.getHeaders(), ...AI_SERVICE_HEADERS },
         timeout: 10 * 60 * 1000,
       });
 
@@ -689,7 +730,7 @@ async function listDocuments(req, res) {
             department_id: document.department_id,
             department_name: department?.name || '',
             allowed_role_ids: allowedRoles.map((role) => role.role_id),
-            preview_available: Boolean(storageKey && document.file_type === 'pdf'),
+            preview_available: Boolean(storageKey && DOCUMENT_MIME_TYPES[document.file_type]),
           })),
           ...legacyDocuments.map((document) => ({ ...document, preview_available: false })),
         ],
@@ -702,7 +743,7 @@ async function listDocuments(req, res) {
           department_id: document.department_id,
           department_name: department?.name || '',
           allowed_role_ids: allowedRoles.map((role) => role.role_id),
-          preview_available: Boolean(storageKey && document.file_type === 'pdf'),
+          preview_available: Boolean(storageKey && DOCUMENT_MIME_TYPES[document.file_type]),
         })),
         warning: 'Previously indexed documents could not be loaded from the AI index',
       });
@@ -719,19 +760,36 @@ async function previewDocument(req, res) {
       where: {
         id: req.params.id,
         ...documentAccessWhere(req.user),
-        file_type: 'pdf',
         storage_key: { not: null },
       },
-      select: { filename: true, storage_key: true },
+      select: { filename: true, file_type: true, storage_key: true },
     });
     if (!document) {
       return res.status(404).json({
-        error: 'PDF preview is unavailable. Re-upload this document to enable preview.',
+        error: 'Preview is unavailable. Re-upload this document to enable preview.',
       });
     }
 
     const filePath = storedDocumentPath(document.storage_key);
     await fs.access(filePath);
+    if (document.file_type !== 'pdf') {
+      const contentType = DOCUMENT_MIME_TYPES[document.file_type];
+      if (!contentType) {
+        return res.status(415).json({ error: 'Preview is not supported for this file type' });
+      }
+      const form = new FORM_DATA();
+      form.append('file', await fs.readFile(filePath), {
+        filename: document.filename,
+        contentType,
+      });
+      const response = await axios.post(`${AI_SERVICE_URL}/preview`, form, {
+        headers: { ...form.getHeaders(), ...AI_SERVICE_HEADERS },
+        timeout: 60 * 1000,
+      });
+      res.set('Cache-Control', 'private, no-store');
+      return res.json(response.data);
+    }
+
     const safeFilename = document.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
     res.set({
       'Content-Type': 'application/pdf',
@@ -752,11 +810,11 @@ async function previewDocument(req, res) {
   } catch (err) {
     if (err.code === 'ENOENT') {
       return res.status(404).json({
-        error: 'PDF preview is unavailable. Re-upload this document to enable preview.',
+        error: 'Preview is unavailable. Re-upload this document to enable preview.',
       });
     }
-    console.error('[ai] PDF preview failed:', err.message);
-    res.status(500).json({ error: 'Failed to load PDF preview' });
+    console.error('[ai] document preview failed:', err.message);
+    res.status(err.response ? 422 : 502).json({ error: 'Failed to generate document preview' });
   }
 }
 

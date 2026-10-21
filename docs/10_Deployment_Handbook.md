@@ -24,18 +24,23 @@ backups, scaling, and observability require additional design and validation.
 ## Docker Compose startup
 
 From the repository root, create a private `.env` file containing a
-`JWT_SECRET`. Example of generating a random value in PowerShell:
+`JWT_SECRET` and an `AI_SERVICE_API_KEY`. Generate both values in PowerShell:
 
 ```powershell
 $bytes = New-Object byte[] 32
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $rng.GetBytes($bytes)
 $secret = [Convert]::ToBase64String($bytes)
+$rng.GetBytes($bytes)
+$aiKey = [Convert]::ToBase64String($bytes)
 $rng.Dispose()
-Set-Content -Path .env -Value "JWT_SECRET=$secret" -Encoding ASCII
+Set-Content -Path .env -Value "JWT_SECRET=$secret`nAI_SERVICE_API_KEY=$aiKey" -Encoding ASCII
 ```
 
-Do not overwrite an existing `.env` containing configuration you want to keep.
+If `.env` already exists, add a separate random `AI_SERVICE_API_KEY` value
+without overwriting its other settings. The same private key must be available
+to the backend and both AI services. Protected AI endpoints fail closed if it
+is missing or incorrect.
 Then build and start:
 
 ```powershell
@@ -80,6 +85,7 @@ DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/ekip?schema=pub
 JWT_SECRET=use-a-long-private-random-value
 PORT=5000
 AI_SERVICE_URL=http://localhost:8000
+AI_SERVICE_API_KEY=the-same-random-private-key-as-the-ai-service
 QDRANT_URL=http://localhost:6333
 UPLOAD_STORAGE_DIR=uploads
 FRONTEND_ORIGINS=http://localhost:5173
@@ -107,6 +113,7 @@ $env:QDRANT_URL = "http://localhost:6333"
 $env:OLLAMA_URL = "http://localhost:11434"
 $env:BACKEND_URL = "http://localhost:5000"
 $env:VISUAL_SERVICE_URL = "http://localhost:8001"
+$env:AI_SERVICE_API_KEY = "the-same-random-private-key-as-the-backend"
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -137,7 +144,8 @@ Check that host ports `5173`, `5000`, `5432`, `6333`, `8000`, and `11434` are
 available. Confirm PostgreSQL is accepting connections, Qdrant responds at
 port 6333, and Ollama has the model installed with `ollama list`.
 
-If backend startup fails, confirm the root Compose `.env` has `JWT_SECRET`,
+If backend startup fails, confirm the root Compose `.env` has `JWT_SECRET` and
+`AI_SERVICE_API_KEY`,
 the database is healthy, and Prisma migrations complete. If the AI service
 cannot connect, check that its URLs use `localhost` for local processes and
 Compose service names for containers. For a GPU-related error, use a

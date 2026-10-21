@@ -45,12 +45,15 @@ The `/ask` flow:
    allowed roles.
 3. Combines dense and BM25 sparse results using reciprocal-rank fusion.
 4. Reranks candidates with a cross-encoder.
-5. Builds a context-limited prompt and calls Ollama.
+5. Asks Ollama to select exact supporting quotations from the retrieved context.
 6. Extracts source markers into document/page citations.
 
-The prompt directs the model to use supplied context only and to abstain when
-the context is insufficient. Treat this as an application behavior, not a
-guarantee that model output is always correct.
+The text service returns only quotations that the backend can verify are
+present in the retrieved chunks; malformed or unsupported quotations produce
+an abstention. It does not return a generated paraphrase as factual prose.
+Visual Q&A still uses the local vision model on retrieved page images and
+requires a source-page citation, but its generated interpretation is not
+machine-verified against OCR text.
 
 ## Authorization in retrieval
 
@@ -117,6 +120,7 @@ page-image previews.
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama service URL |
 | `BACKEND_URL` | `http://localhost:5000` | Progress callback target |
 | `VISUAL_SERVICE_URL` | `http://localhost:8001` | Optional visual-service URL |
+| `AI_SERVICE_API_KEY` | private shared value | Authenticates backend-to-AI and text-to-visual requests |
 | `VISUAL_INGEST_TIMEOUT` | `120` | Visual-ingestion request timeout |
 | `COLPALI_MODEL` | `vidore/colpali-v1.2` | Visual embedding model |
 | `QWEN_MODEL` | `Qwen/Qwen2-VL-7B-Instruct` | Visual QA model |

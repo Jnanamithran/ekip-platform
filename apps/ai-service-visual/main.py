@@ -12,11 +12,12 @@ Endpoints:
 """
 
 import os
+import secrets
 import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel, ValidationError
 
 from visual.colpali_embedder import (
@@ -28,6 +29,17 @@ from visual.qwen_generator import answer_from_images, QWEN_MODEL
 from PIL import Image
 
 app = FastAPI(title="EKIP Visual AI Service", version="0.1.0")
+AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "")
+
+
+async def require_ai_service_key(x_ekip_service_key: str | None = Header(default=None)):
+    if len(AI_SERVICE_API_KEY) < 32:
+        raise HTTPException(status_code=503, detail="Visual service authentication is not configured")
+    if not x_ekip_service_key or not secrets.compare_digest(
+        x_ekip_service_key,
+        AI_SERVICE_API_KEY,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid service credentials")
 
 
 # ── Request / Response schemas ────────────────────────────────────────────────
@@ -111,6 +123,7 @@ def health():
 
 @app.post("/visual/ingest", response_model=IngestResponse)
 async def ingest(
+    _service_key: None = Depends(require_ai_service_key),
     rbac:        str        = Form(...),   # JSON-encoded RBACInfo
     document_id: str        = Form(...),
     file:        UploadFile = File(...),
@@ -183,7 +196,10 @@ async def ingest(
 
 
 @app.post("/visual/search", response_model=VisualSearchResponse)
-def search(req: VisualSearchRequest):
+def search(
+    req: VisualSearchRequest,
+    _service_key: None = Depends(require_ai_service_key),
+):
     """
     Search the visual Qdrant collection.
     RBAC filter applied BEFORE vector search — same rule as the text pipeline.
@@ -223,7 +239,10 @@ def search(req: VisualSearchRequest):
 
 
 @app.post("/visual/ask", response_model=VisualQAResponse)
-async def ask_visual(req: VisualQARequest):
+async def ask_visual(
+    req: VisualQARequest,
+    _service_key: None = Depends(require_ai_service_key),
+):
     """
     Full visual QA pipeline:
       1. ColPali retrieval with RBAC filter (before retrieval — always)
@@ -306,7 +325,10 @@ async def ask_visual(req: VisualQARequest):
 
 
 @app.delete("/visual/document/{document_id}")
-def delete_document(document_id: str):
+def delete_document(
+    document_id: str,
+    _service_key: None = Depends(require_ai_service_key),
+):
     """
     Remove all visual pages for a document from Qdrant.
     Called when the backend deletes a document.
