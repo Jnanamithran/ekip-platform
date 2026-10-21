@@ -2,7 +2,8 @@
 
 > Last reviewed: 2026-10-21
 > Project stage: functional local prototype
-> For installation and usage, start with the [README](README.md).
+> Current branch: fix/handle-missing-visual-collection
+> For installation and usage, start with the [README](README.md)
 
 ## Summary
 
@@ -32,8 +33,9 @@ successfully on every machine.
 ## Main user flows
 
 1. **Signup and authentication:** the first user creates an organization,
-   workspace, department, and Admin account. Login and refresh use JWT access
-   tokens and rotating refresh tokens.
+   workspace, department, and an immutable Owner account. The Owner role is
+   permanent and cannot be changed, transferred, or deleted. Login and refresh
+   use JWT access tokens and rotating refresh tokens.
 2. **Document ingestion:** the backend stores document metadata and forwards
    content to the AI service. The service detects supported file types, parses
    content, chunks by page, generates embeddings, and writes payloads with
@@ -44,9 +46,14 @@ successfully on every machine.
    reranks passages, calls Ollama, and returns citations.
 4. **History and preview:** answer history is per user. Retained PDF originals
    can be previewed at cited pages.
-5. **Administration and integrations:** Admins have workspace and user
-   management endpoints and pages. Google Drive import is available to
-   authorized Admins and Managers, subject to OAuth setup.
+5. **Administration and integrations:** Members whose role grants the relevant
+   permissions have workspace and user management endpoints and pages. The Owner
+   creates and assigns custom roles that define what each role can do (search,
+   upload, delete documents, manage document access, connect/import Drive,
+   manage users, manage roles, manage workspace/departments, view analytics).
+   Google Drive import is available to roles with Drive permissions, subject to
+   OAuth setup; you can import individual files or whole folders and choose
+   which roles can search each file.
 
 ## Quality and operational notes
 
