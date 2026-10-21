@@ -376,6 +376,23 @@ export async function createDepartment(payload) {
     });
 }
 
+export async function getDepartment(id) {
+    return apiFetch('/admin/departments/' + encodeURIComponent(id));
+}
+
+export async function updateDepartment(id, payload) {
+    return apiFetch('/admin/departments/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function deleteDepartment(id) {
+    return apiFetch('/admin/departments/' + encodeURIComponent(id), {
+        method: 'DELETE',
+    });
+}
+
 export async function createAdminUser(payload) {
     return apiFetch('/admin/users', {
         method: 'POST',

@@ -6,6 +6,12 @@ import {
   getOrganizationRoles,
   updateOrganizationRole,
 } from "../lib/apiClient";
+import {
+  getDepartments,
+  createDepartment,
+  updateDepartment,
+  deleteDepartment,
+} from "../lib/apiClient";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
@@ -101,11 +107,23 @@ export default function RoleManagement() {
   const [deletingRole, setDeletingRole] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
+  // Department management state
+  const [departments, setDepartments] = useState([]);
+  const [deptDraft, setDeptDraft] = useState({ id: null, name: "" });
+  const [deptSaving, setDeptSaving] = useState(false);
+  const [deptError, setDeptError] = useState("");
+  const [deptNotice, setDeptNotice] = useState("");
+  const [deletingDept, setDeletingDept] = useState(null);
+
   const load = useCallback(async () => {
     try {
-      const result = await getOrganizationRoles();
+      const [result, deptResult] = await Promise.all([
+        getOrganizationRoles(),
+        getDepartments().catch(() => ({ departments: [] })),
+      ]);
       setRoles(result.roles || []);
       setPermissions(result.permissions || []);
+      setDepartments(deptResult.departments || []);
       setError("");
     } catch (loadError) {
       setError(loadError.message || "Failed to load roles");
@@ -200,7 +218,61 @@ export default function RoleManagement() {
     setDeleteConfirm(null);
   }
 
-  // Group permissions for organized rendering
+  // Department management functions
+  async function saveDepartment(event) {
+    event.preventDefault();
+    if (!deptDraft.name.trim()) {
+      setDeptError("Department name is required");
+      return;
+    }
+    setDeptSaving(true);
+    setDeptError("");
+    setDeptNotice("");
+    try {
+      if (deptDraft.id) {
+        await updateDepartment(deptDraft.id, { name: deptDraft.name.trim() });
+        setDeptNotice(`Department "${deptDraft.name.trim()}" updated successfully.`);
+      } else {
+        await createDepartment({ name: deptDraft.name.trim() });
+        setDeptNotice(`Department "${deptDraft.name.trim()}" created successfully.`);
+      }
+      setDeptDraft({ id: null, name: "" });
+      await load();
+    } catch (saveError) {
+      setDeptError(saveError.message || "Failed to save department");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
+
+  function startEditDepartment(dept) {
+    setDeptDraft({ id: dept.id, name: dept.name });
+    setDeptError("");
+    setDeptNotice("");
+  }
+
+  function cancelEditDepartment() {
+    setDeptDraft({ id: null, name: "" });
+    setDeptError("");
+    setDeptNotice("");
+  }
+
+  async function confirmDeleteDepartment() {
+    if (!deletingDept) return;
+    setDeptSaving(true);
+    setDeptError("");
+    setDeptNotice("");
+    try {
+      await deleteDepartment(deletingDept.id);
+      setDeptNotice(`Department "${deletingDept.name}" deleted.`);
+      setDeletingDept(null);
+      await load();
+    } catch (deleteError) {
+      setDeptError(deleteError.message || "Failed to delete department");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
   const groupedPermissions = permissions.reduce((acc, permission) => {
     const meta = getPermissionMeta(permission);
     if (!acc[meta.group]) acc[meta.group] = [];
@@ -445,6 +517,119 @@ export default function RoleManagement() {
           ))
         )}
       </Card>
+
+      {/* Department Management Section */}
+      <Card className="p-6">
+        <div className="border-b border-hairline pb-2 mb-4">
+          <h2 className="font-medium text-ink">Department management</h2>
+          <p className="text-xs text-slate">
+            Create and manage workspace departments. Departments group users and documents.
+          </p>
+        </div>
+
+        {deptError && (
+          <div role="alert" className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-danger mb-4">
+            {deptError}
+          </div>
+        )}
+        {deptNotice && (
+          <div role="status" className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-success mb-4">
+            {deptNotice}
+          </div>
+        )}
+
+        <form onSubmit={saveDepartment} className="flex flex-col gap-4 mb-6">
+          <label className="flex max-w-md flex-col gap-1 text-sm text-ink-soft">
+            {deptDraft.id ? "Edit department name" : "New department name"}
+            <input
+              required
+              maxLength={64}
+              value={deptDraft.name}
+              onChange={(event) => setDeptDraft({ ...deptDraft, name: event.target.value })}
+              placeholder="e.g. Engineering, HR, Sales"
+              className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink placeholder:text-slate-light focus:border-index focus:outline-none"
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={deptSaving || !deptDraft.name.trim()}>
+              {deptSaving ? "Saving…" : deptDraft.id ? "Save department" : "Create department"}
+            </Button>
+            {deptDraft.id && (
+              <Button type="button" variant="secondary" onClick={cancelEditDepartment}>
+                Cancel
+              </Button>
+            )}
+          </div>
+        </form>
+
+        {departments.length === 0 ? (
+          <p className="text-sm text-slate">No departments defined yet.</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {departments.map((dept) => (
+              <div key={dept.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hairline bg-paper-raised/40 p-3">
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-medium text-sm text-ink">{dept.name}</h3>
+                  <p className="text-xs text-slate">
+                    {dept._count?.users ?? 0} member{(dept._count?.users ?? 0) === 1 ? "" : "s"} ·{" "}
+                    {dept._count?.documents ?? 0} document{(dept._count?.documents ?? 0) === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEditDepartment(dept)}>
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-3 py-1 text-xs hover:text-danger"
+                    onClick={() => setDeletingDept(dept)}
+                    disabled={(dept._count?.users ?? 0) > 0 || (dept._count?.documents ?? 0) > 0}
+                    title={(dept._count?.users ?? 0) > 0 || (dept._count?.documents ?? 0) > 0 ? "Department has members or documents attached" : "Delete department"}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Delete Department Confirmation Modal */}
+      {deletingDept && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="flex w-full max-w-sm flex-col gap-4 p-6 shadow-xl">
+            <h2 className="font-display text-lg text-ink">Delete department?</h2>
+            <p className="text-sm text-ink-soft">
+              Are you sure you want to delete the department <strong>{deletingDept.name}</strong>?
+            </p>
+            {(deletingDept._count?.users ?? 0) > 0 || (deletingDept._count?.documents ?? 0) > 0 ? (
+              <div className="rounded-md border border-hairline bg-paper-raised p-3 text-xs text-danger">
+                <strong>Cannot delete:</strong> This department has {deletingDept._count?.users ?? 0} member(s) and{" "}
+                {deletingDept._count?.documents ?? 0} document(s). Reassign them first.
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" variant="secondary" onClick={() => setDeletingDept(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={confirmDeleteDepartment}
+                disabled={
+                  deptSaving ||
+                  (deletingDept._count?.users ?? 0) > 0 ||
+                  (deletingDept._count?.documents ?? 0) > 0
+                }
+              >
+                {deptSaving ? "Deleting…" : "Delete department"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
