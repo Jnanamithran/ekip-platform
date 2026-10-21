@@ -26,12 +26,12 @@ business-critical data.
 ```text
 Browser
   └── React + Vite frontend :5173
-       └── Express + Prisma backend :5000
-            ├── PostgreSQL :5432
-            └── FastAPI AI service :8000
-                 ├── Qdrant :6333
-                 ├── Ollama :11434
-                 └── Optional visual AI service :8001
+         └── Express + Prisma backend :5000
+              ├── PostgreSQL :5432
+              └── FastAPI AI service :8000
+                   ├── Qdrant :6333
+                   ├── Ollama :11434
+                   └── Optional visual AI service :8001
 ```
 
 The text AI pipeline parses and chunks PDF, DOCX, XLSX, and TXT files; indexes
@@ -48,7 +48,6 @@ provides a separate scanned-page pipeline using ColPali and Qwen2-VL.
 | Qdrant | 6333 | Text and visual document indexes |
 | Ollama | 11434 | Local `llama3.2:3b` language model |
 | Visual AI service | 8001 | Optional scanned-page ingestion and visual QA |
-
 ## Run everything with Docker
 
 ### Requirements
@@ -98,143 +97,34 @@ configured model into its persistent volume:
 docker compose exec ollama ollama pull llama3.2:3b
 ```
 
-Wait for PostgreSQL and the backend to become healthy, then open
-<http://localhost:5173/signup>. The full `ai` profile includes the visual AI
-service, whose Compose configuration requests an NVIDIA GPU. If your Docker
-installation cannot provide one, the profile may fail to start; see the
-deployment handbook for troubleshooting and options.
-
-### Stop and inspect
+Wait for PostgreSQL and the AI services to become healthy, then continue:
 
 ```powershell
 docker compose ps
-docker compose logs --tail 100
-docker compose logs --tail 100 backend
-docker compose down
 ```
+## Project documentation
 
-`docker compose down` preserves named volumes. **Do not use
-`docker compose down -v` unless you intend to delete the database, indexed
-content, retained uploads, and downloaded Ollama models.**
+- [Project progress](PROJECT_PROGRESS.md)
+- [Project handbook](docs/01_Project_Handbook.md)
+- [System architecture](docs/05_System_Architecture.md)
+- [Backend handbook](docs/06_Backend_Handbook.md)
+- [AI handbook](docs/08_AI_Handbook.md)
+- [Deployment handbook](docs/10_Deployment_Handbook.md)
+- [Project roadmap](docs/11_Project_Roadmap.md)
+## Known limitations
 
-## Run application code locally without Docker
-
-This runs the frontend, backend, and AI application processes directly on
-Windows. You still need local installations of PostgreSQL, Qdrant, and Ollama;
-this guide does not use containers for those dependencies. Install PostgreSQL,
-create a database named `ekip`, and start PostgreSQL, Qdrant, and Ollama so they
-are reachable on their default ports. Then fetch the model:
-
-```powershell
-ollama pull llama3.2:3b
-```
-
-Run each application in its own PowerShell window. Do not also start the
-corresponding Compose application services, because they use the same host
-ports.
-
-### Backend
-
-From the repository root, in PowerShell:
-
-```powershell
-Set-Location .\apps\backend
-```
-
-Create `.env` in the current directory (`apps/backend/.env` in the repository)
-with your PostgreSQL password and a private JWT secret:
-
-```dotenv
-DATABASE_URL="postgresql://postgres:YOUR_POSTGRES_PASSWORD@localhost:5432/ekip?schema=public"
-JWT_SECRET=replace-with-a-long-private-random-secret
-PORT=5000
-AI_SERVICE_URL=http://localhost:8000
-QDRANT_URL=http://localhost:6333
-UPLOAD_STORAGE_DIR=uploads
-FRONTEND_ORIGINS=http://localhost:5173
-```
-
-Install dependencies, generate Prisma Client, apply migrations, and run the
-development server:
-
-```powershell
-npm ci
-npx prisma generate --schema src/prisma/schema.prisma
-npx prisma migrate deploy --schema src/prisma/schema.prisma
-npm run dev
-```
-
-### Text AI service
-
-In another PowerShell window:
-
-```powershell
-Set-Location .\apps\ai-service
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-$env:QDRANT_URL = "http://localhost:6333"
-$env:OLLAMA_URL = "http://localhost:11434"
-$env:BACKEND_URL = "http://localhost:5000"
-$env:VISUAL_SERVICE_URL = "http://localhost:8001"
-python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-The text pipeline can run without the visual service. Scanned PDFs requiring
-visual indexing need that additional service and compatible hardware.
-
-### Frontend
-
-In a third PowerShell window:
-
-```powershell
-Set-Location .\apps\frontend
-npm ci
-```
-
-Set `VITE_API_URL=http://localhost:5000` in `apps/frontend/.env` if the
-existing environment file does not already point to the local backend, then
-start Vite:
-
-```powershell
-npm run dev
-```
-
-Open <http://localhost:5173/signup>.
-
-## Use EKIP
-
-1. Create an organization, workspace, department, and first Admin account on
-   the Signup page.
-2. Sign in and upload a PDF, DOCX, XLSX, or TXT file.
-3. Wait for processing/indexing to finish, then ask a question on Search.
-4. Review source citations. PDF page previews are available when an original
-   PDF is retained.
-5. Admins can review workspace settings and manage users. The backend also
-   provides a Google Drive integration; connect and import supported files from
-   the Integrations page.
-
-## Configuration
-
-| Variable | Used by | Purpose |
-| --- | --- | --- |
-| `JWT_SECRET` | Backend | Signs access tokens |
-| `DATABASE_URL` | Backend / Prisma | PostgreSQL connection string |
-| `AI_SERVICE_URL` | Backend | Text AI service address |
-| `QDRANT_URL` | Backend and AI services | Qdrant address |
-| `OLLAMA_URL` | Text AI service | Ollama address |
-| `BACKEND_URL` | Text AI service | Reports processing progress |
-| `FRONTEND_ORIGINS` | Backend | Allowed browser origin(s) |
-| `VITE_API_URL` | Frontend | Backend address used by the browser |
-| `VISUAL_SERVICE_URL` | Text AI service | Optional visual AI address |
-
-Example files are provided in the individual application directories. Never
-commit `.env` files, credentials, or API keys.
-
-Google Drive OAuth is optional and requires a Google OAuth client. See
-[Google Drive integration](docs/06_Backend_Handbook.md#google-drive-apis).
-
+- This is a prototype; production deployment, operational monitoring, backup
+  and recovery, and independent security review are not complete.
+- Scanned-PDF visual processing requires the optional visual model stack and
+  substantial compute resources. Text extraction/OCR behavior depends on the
+  document and installed model/runtime support.
+- Supported upload formats are PDF, DOCX, XLSX, and TXT. PPTX and CSV are not
+  supported.
+- Google Drive import uses EKIP role-based permissions; you can import
+  individual files or entire folders and choose which organization roles can
+  search each imported file. It does not preserve Drive sharing permissions.
+- PDF preview requires the original file to be retained. Other supported
+  formats provide text citations, not PDF previews.
 ## Tests and checks
 
 Frontend build and lint:
@@ -263,27 +153,172 @@ python -m pytest tests -q
 Some AI tests use live Qdrant or Ollama dependencies; check their fixtures and
 test markers before running them without those services. See
 [AI Handbook: tests](docs/08_AI_Handbook.md#tests).
+## Configuration
 
-## Known limitations
+| Variable | Used by | Purpose |
+| --- | --- | --- |
+| `JWT_SECRET` | Backend | Signs access tokens |
+| `DATABASE_URL` | Backend / Prisma | PostgreSQL connection string |
+| `AI_SERVICE_URL` | Backend | Text AI service address |
+| `QDRANT_URL` | Backend and AI services | Qdrant address |
+| `OLLAMA_URL` | Text AI service | Ollama address |
+| `BACKEND_URL` | Text AI service | Reports processing progress |
+| `FRONTEND_ORIGINS` | Backend | Allowed browser origin(s) |
+| `VITE_API_URL` | Frontend | Backend address used by the browser |
+| `VISUAL_SERVICE_URL` | Text AI service | Optional visual AI address |
 
-- This is a prototype; production deployment, operational monitoring, backup
-  and recovery, and independent security review are not complete.
-- Scanned-PDF visual processing requires the optional visual model stack and
-  substantial compute resources. Text extraction/OCR behavior depends on the
-  document and installed model/runtime support.
-- Supported upload formats are PDF, DOCX, XLSX, and TXT. PPTX and CSV are not
-  supported.
-- Google Drive import uses EKIP role-based permissions; it does not preserve
-  Drive sharing permissions.
-- PDF preview requires the original file to be retained. Other supported
-  formats provide text citations, not PDF previews.
+Example files are provided in the individual application directories. Never
+commit `.env` files, credentials, or API keys.
 
-## Project documentation
+Google Drive OAuth is optional and requires a Google OAuth client. See
+[Google Drive integration](docs/06_Backend_Handbook.md#google-drive-apis).
+## Use EKIP
 
-- [Project progress](PROJECT_PROGRESS.md)
-- [Project handbook](docs/01_Project_Handbook.md)
-- [System architecture](docs/05_System_Architecture.md)
-- [Backend handbook](docs/06_Backend_Handbook.md)
-- [AI handbook](docs/08_AI_Handbook.md)
-- [Deployment handbook](docs/10_Deployment_Handbook.md)
-- [Project roadmap](docs/11_Project_Roadmap.md)
+1. Create an organization, workspace, department, and first Owner account on
+   the Signup page. The Owner role is permanent — it cannot be changed,
+   transferred, or deleted.
+2. Sign in and upload a PDF, DOCX, XLSX, or TXT file.
+3. Wait for processing/indexing to finish, then ask a question on Search.
+4. Review source citations. PDF page previews are available when an original
+   PDF is retained.
+5. Members whose role grants the relevant permissions can review workspace
+   settings and manage users. Create additional custom roles (and choose what
+   each can do) from the Manage Roles page. The backend also provides a Google
+   Drive integration; connect Drive, then import individual files or whole
+   folders from the Integrations page.
+## Run application code locally without Docker
+
+This section describes running each component directly on your host machine
+without using Docker Compose. This is useful for development, debugging, or
+when Docker resources are limited.
+
+### Prerequisites
+
+- **Node.js** (v18 or higher) for the frontend and backend
+- **Python** (3.11 or higher) for the AI service
+- **PostgreSQL** running and accessible
+- **Qdrant** running (local or remote)
+- **Ollama** running locally with `llama3.2:3b` model pulled
+- Optional: **Ollama visual** with ColPali/Qwen2-VL models for visual AI
+
+### Environment setup
+
+Create `.env` files in each application directory. Example files are provided
+in the individual application directories.
+
+**Root `.env` (or set these as environment variables):**
+
+```
+JWT_SECRET=your-jwt-secret
+DATABASE_URL=postgresql://ekip_user:ekip_password@localhost:5432/ekip
+AI_SERVICE_URL=http://localhost:8000
+QDRANT_URL=http://localhost:6333
+OLLAMA_URL=http://localhost:11434
+BACKEND_URL=http://localhost:5000
+FRONTEND_ORIGINS=http://localhost:5173
+VITE_API_URL=http://localhost:5000
+VISUAL_SERVICE_URL=http://localhost:8001 (optional)
+```
+
+**Frontend (`apps/frontend/.env`):**
+
+```
+VITE_API_URL=http://localhost:5000
+```
+
+**Backend (`apps/backend/.env`):**
+
+```
+JWT_SECRET=your-jwt-secret
+DATABASE_URL=postgresql://ekip_user:ekip_password@localhost:5432/ekip
+AI_SERVICE_URL=http://localhost:8000
+QDRANT_URL=http://localhost:6333
+OLLAMA_URL=http://localhost:11434
+BACKEND_URL=http://localhost:5000
+FRONTEND_ORIGINS=http://localhost:5173
+VITE_API_URL=http://localhost:5000
+VISUAL_SERVICE_URL=http://localhost:8001 (optional)
+```
+
+### Running each service individually
+
+#### 1. Start PostgreSQL
+
+If you don't already have PostgreSQL running:
+
+**Windows:** Install PostgreSQL and start the service:
+```powershell
+# Start PostgreSQL service
+net start postgresql
+```
+
+**Or using Docker (one-off):**
+```powershell
+docker run -d -e POSTGRES_DB=ekip -e POSTGRES_USER=ekip_user -e POSTGRES_PASSWORD=ekip_password -p 5432:5432 postgres:15
+```
+
+#### 2. Start Qdrant
+
+**Using Docker (recommended for local development):**
+```powershell
+docker run -d -p 6333:6333 qdrant/qdrant
+```
+
+**Or if already installed locally:** Ensure Qdrant is running on port 6333.
+
+#### 3. Start Ollama
+
+Ensure Ollama is installed and the `llama3.2:3b` model is pulled:
+
+```powershell
+# If Ollama not running, start it
+ollama serve
+
+# Pull the model if not already installed
+ollama pull llama3.2:3b
+```
+
+#### 4. Start the Backend
+
+```powershell
+Set-Location .\apps\backend
+npm ci
+npm run migrate  # or: npx prisma migrate dev --name init
+npm run dev
+```
+
+The backend will run at `http://localhost:5000`.
+
+#### 5. Start the AI Service
+
+```powershell
+Set-Location .\apps\ai-service
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+ollama serve &  # Ensure Ollama is running in background
+python -m uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+The AI service will run at `http://localhost:8000`.
+
+#### 6. Start the Frontend
+
+```powershell
+Set-Location .\apps\frontend
+npm install
+npm run dev
+```
+
+The frontend will be available at `http://localhost:5173`.
+
+### Verification
+
+After starting all services:
+
+1. Visit `http://localhost:5173` in your browser
+2. Sign up for a new account (or use existing credentials)
+3. Upload a supported document (PDF, DOCX, XLSX, or TXT)
+4. Wait for processing/indexing to complete
+5. Ask a question on the search page
+6. Review cited answers and source references
