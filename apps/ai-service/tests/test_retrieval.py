@@ -72,10 +72,11 @@ def test_rbac_filter_uses_organization_and_custom_role_ids():
         conditions = call_kwargs["scroll_filter"].must
         fields = [c.key for c in conditions]
         assert "org_id" in fields
+        assert "workspace_id" in fields
         assert "allowed_role_ids" in fields
 
 
-def test_owner_filter_is_scoped_to_organization_only():
+def test_owner_filter_is_scoped_to_organization_and_workspace():
     pytest.importorskip("qdrant_client", reason="qdrant-client not installed")
     with patch("retrieval.rbac_filter.get_client") as mock_client_fn:
         mock_client = MagicMock()
@@ -94,4 +95,4 @@ def test_owner_filter_is_scoped_to_organization_only():
         ))
 
         conditions = mock_client.scroll.call_args.kwargs["scroll_filter"].must
-        assert [condition.key for condition in conditions] == ["org_id"]
+        assert [condition.key for condition in conditions] == ["org_id", "workspace_id"]

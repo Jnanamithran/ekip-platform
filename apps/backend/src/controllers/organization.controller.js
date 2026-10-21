@@ -21,10 +21,17 @@ async function createOrganization(req, res) {
       department_name,
     } = req.body || {};
 
-    if (![organization_name, admin_email, admin_password].every(isText)) {
+    if (![organization_name, workspace_name, department_name, admin_email, admin_password].every(isText)) {
       return res.status(400).json({
-        error: 'organization_name, admin_email and admin_password are required',
+        error: 'organization_name, workspace_name, department_name, admin_email and admin_password are required',
       });
+    }
+    if (
+      organization_name.trim().length > 120 ||
+      workspace_name.trim().length > 120 ||
+      department_name.trim().length > 120
+    ) {
+      return res.status(400).json({ error: 'Organization, workspace and department names must be 120 characters or fewer' });
     }
     if (!EMAIL_RE.test(admin_email)) {
       return res.status(400).json({ error: 'Invalid email address' });
@@ -43,10 +50,11 @@ async function createOrganization(req, res) {
           name: organization_name.trim(),
           workspaces: {
             create: {
-              name: isText(workspace_name) ? workspace_name.trim() : 'Main Workspace',
+              name: workspace_name.trim(),
               departments: {
                 create: {
-                  name: isText(department_name) ? department_name.trim() : 'General',
+                  name: department_name.trim(),
+                  is_default: true,
                 },
               },
             },

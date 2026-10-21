@@ -44,6 +44,7 @@ class RBACInfo(BaseModel):
     org_id: str
     workspace_id: str
     department_id: str
+    department_ids: Optional[List[str]] = None
     role_id: str
     is_owner: bool = False
     allowed_role_ids: Optional[List[str]] = None
@@ -101,20 +102,24 @@ def report_progress_sync(token: str, endpoint: str, **details):
 # ---------------------------------------------------------------------------
 
 def has_visual_docs(rbac_dict: dict) -> bool:
-    """Check if this user has any visual-indexed documents in scope.
-
-    Scrolls the visual Qdrant collection with an RBAC filter (limit=1) and
-    returns True when at least one accessible visual page exists.
-    """
+    """Check if this user has any visual-indexed documents in scope."""
     client = get_client()
     conditions = [
         FieldCondition(key="org_id", match=MatchValue(value=rbac_dict["org_id"])),
+        FieldCondition(key="workspace_id", match=MatchValue(value=rbac_dict["workspace_id"])),
     ]
     if not rbac_dict["is_owner"]:
+        department_ids = rbac_dict.get("department_ids") or [rbac_dict["department_id"]]
+        if not department_ids:
+            return False
         conditions.extend([
             FieldCondition(
                 key="allowed_role_ids",
                 match=MatchValue(value=rbac_dict["role_id"]),
+            ),
+            FieldCondition(
+                key="department_id",
+                match=MatchAny(any=department_ids),
             ),
         ])
     rbac_filter = Filter(must=conditions)
@@ -206,8 +211,10 @@ async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
                 'org_id': rbac_dict['org_id'],
                 'workspace_id': rbac_dict['workspace_id'],
                 'department_id': rbac_dict['department_id'],
+                'department_ids': rbac_dict.get('department_ids') or [rbac_dict['department_id']],
                 'role_id': rbac_dict['role_id'],
                 'is_owner': rbac_dict['is_owner'],
+                'allowed_role_ids': rbac_dict.get('allowed_role_ids') or [rbac_dict['role_id']],
             },
         )
         response.raise_for_status()
@@ -253,10 +260,12 @@ async def ask(req: AskRequest):
     '''
     # Normalize the incoming RBAC shape into the retrieval-layer contract
     allowed_role_ids = req.rbac.allowed_role_ids or [req.rbac.role_id]
+    department_ids = req.rbac.department_ids or [req.rbac.department_id]
     rbac = RBACContext(
         org_id        = req.rbac.org_id,
         workspace_id  = req.rbac.workspace_id,
         department_id = req.rbac.department_id,
+        department_ids = department_ids,
         role_id       = req.rbac.role_id,
         is_owner      = req.rbac.is_owner,
         allowed_role_ids = allowed_role_ids,
@@ -269,8 +278,10 @@ async def ask(req: AskRequest):
         'org_id':        req.rbac.org_id,
         'workspace_id':  req.rbac.workspace_id,
         'department_id': req.rbac.department_id,
+        'department_ids': department_ids,
         'role_id':       req.rbac.role_id,
         'is_owner':      req.rbac.is_owner,
+        'allowed_role_ids': allowed_role_ids,
     }
 
     visual_available = has_visual_docs(rbac_dict)

@@ -435,7 +435,8 @@ export default function DepartmentEdit() {
             {filteredDepartments.map((dept) => {
               const memberCount = dept._count?.users ?? 0;
               const docCount = dept._count?.documents ?? 0;
-              const hasRecords = memberCount > 0 || docCount > 0;
+              const additionalAccessCount = dept._count?.authorized_users ?? 0;
+              const hasRecords = memberCount > 0 || docCount > 0 || additionalAccessCount > 0;
 
               return (
                 <div
@@ -445,6 +446,11 @@ export default function DepartmentEdit() {
                   <div className="flex flex-col gap-1 min-w-48">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm text-ink">{dept.name}</span>
+                      {dept.is_default && (
+                        <span className="rounded bg-paper-raised px-1.5 py-0.5 text-[10px] text-slate border border-hairline">
+                          Default
+                        </span>
+                      )}
                       {dept.workspace?.name && (
                         <span className="rounded bg-paper-raised px-1.5 py-0.5 text-[10px] text-slate border border-hairline">
                           {dept.workspace.name}
@@ -455,7 +461,7 @@ export default function DepartmentEdit() {
                       <p className="text-xs text-slate-light max-w-md">{dept.description}</p>
                     )}
                     <p className="text-xs text-slate">
-                      {memberCount} member{memberCount === 1 ? "" : "s"} · {docCount} document{docCount === 1 ? "" : "s"}
+                      {memberCount} member{memberCount === 1 ? "" : "s"} · {docCount} document{docCount === 1 ? "" : "s"} · {additionalAccessCount} additional access grant{additionalAccessCount === 1 ? "" : "s"}
                     </p>
                   </div>
 
@@ -471,14 +477,17 @@ export default function DepartmentEdit() {
                     <Button
                       type="button"
                       variant="secondary"
-                      className={`px-3 py-1 text-xs hover:text-danger ${hasRecords ? "opacity-60" : ""}`}
+                      disabled={hasRecords || dept.is_default}
+                      className={`px-3 py-1 text-xs hover:text-danger ${hasRecords || dept.is_default ? "opacity-60" : ""}`}
                       onClick={() => {
                         setDeleteError("");
                         setDeletingDept(dept);
                       }}
                       title={
-                        hasRecords
-                          ? "Department has members or documents attached"
+                        dept.is_default
+                          ? "The default department cannot be deleted"
+                          : hasRecords
+                          ? "Department has members, documents, or additional access grants"
                           : "Delete department"
                       }
                     >
@@ -503,17 +512,25 @@ export default function DepartmentEdit() {
               </p>
             </div>
 
-            {(deletingDept._count?.users ?? 0) > 0 ||
-            (deletingDept._count?.documents ?? 0) > 0 ? (
+            {deletingDept.is_default ? (
+              <div className="rounded-md border border-hairline bg-paper-raised p-4 text-xs text-slate">
+                <p className="font-medium text-danger">The default department cannot be deleted</p>
+              </div>
+            ) : (
+              (deletingDept._count?.users ?? 0) > 0 ||
+              (deletingDept._count?.documents ?? 0) > 0 ||
+              (deletingDept._count?.authorized_users ?? 0) > 0
+            ) ? (
               <div className="rounded-md border border-hairline bg-paper-raised p-4 text-xs text-slate">
                 <p className="font-medium text-danger">Cannot delete this department</p>
                 <p className="mt-1 leading-relaxed">
                   This department currently has{" "}
                   <strong>{deletingDept._count?.users ?? 0} member(s)</strong> and{" "}
-                  <strong>{deletingDept._count?.documents ?? 0} document(s)</strong>.
+                  <strong>{deletingDept._count?.documents ?? 0} document(s)</strong> plus{" "}
+                  <strong>{deletingDept._count?.authorized_users ?? 0} additional access grant(s)</strong>.
                 </p>
                 <p className="mt-2 text-slate-light">
-                  To protect your organization’s data, you must reassign or remove all members and documents from this department before it can be deleted.
+                  Reassign all members, documents, and additional access grants before deleting this department.
                 </p>
               </div>
             ) : (
@@ -535,13 +552,18 @@ export default function DepartmentEdit() {
                 disabled={deleting}
                 onClick={() => setDeletingDept(null)}
               >
-                {(deletingDept._count?.users ?? 0) > 0 ||
-                (deletingDept._count?.documents ?? 0) > 0
+                {
+                deletingDept.is_default ||
+                (deletingDept._count?.users ?? 0) > 0 ||
+                (deletingDept._count?.documents ?? 0) > 0 ||
+                (deletingDept._count?.authorized_users ?? 0) > 0
                   ? "Close"
                   : "Cancel"}
               </Button>
-              {(deletingDept._count?.users ?? 0) === 0 &&
-                (deletingDept._count?.documents ?? 0) === 0 && (
+              {!deletingDept.is_default &&
+                (deletingDept._count?.users ?? 0) === 0 &&
+                (deletingDept._count?.documents ?? 0) === 0 &&
+                (deletingDept._count?.authorized_users ?? 0) === 0 && (
                   <Button
                     type="button"
                     variant="danger"

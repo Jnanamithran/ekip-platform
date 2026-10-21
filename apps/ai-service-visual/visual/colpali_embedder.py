@@ -30,7 +30,7 @@ from colpali_engine.models import ColPali, ColPaliProcessor
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
-    Filter, FieldCondition, MatchValue, PayloadSchemaType,
+    Filter, FieldCondition, MatchValue, MatchAny, PayloadSchemaType,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -202,12 +202,20 @@ def search_visual(
 
     conditions = [
         FieldCondition(key="org_id", match=MatchValue(value=rbac["org_id"])),
+        FieldCondition(key="workspace_id", match=MatchValue(value=rbac["workspace_id"])),
     ]
     if not rbac["is_owner"]:
+        department_ids = rbac.get("department_ids") or [rbac["department_id"]]
+        if not department_ids:
+            return []
         conditions.extend([
             FieldCondition(
                 key="allowed_role_ids",
                 match=MatchValue(value=rbac["role_id"]),
+            ),
+            FieldCondition(
+                key="department_id",
+                match=MatchAny(any=department_ids),
             ),
         ])
     rbac_filter = Filter(must=conditions)

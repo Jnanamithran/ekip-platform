@@ -8,13 +8,13 @@ datasource db {
 }
 
 model Organization {
-  id             String       @id @default(uuid())
-  name           String
-  owner_user_id  String?      @unique
-  created_at     DateTime     @default(now())
-  owner          User?        @relation("OrganizationOwner", fields: [owner_user_id], references: [id], onDelete: Restrict)
-  workspaces     Workspace[]
-  roles          OrganizationRole[]
+  id            String             @id @default(uuid())
+  name          String
+  owner_user_id String?            @unique
+  created_at    DateTime           @default(now())
+  owner         User?              @relation("OrganizationOwner", fields: [owner_user_id], references: [id], onDelete: Restrict)
+  workspaces    Workspace[]
+  roles         OrganizationRole[]
 }
 
 model Workspace {
@@ -26,29 +26,35 @@ model Workspace {
 }
 
 model Department {
-  id           String    @id @default(uuid())
-  workspace_id String
-  name         String
-  workspace    Workspace @relation(fields: [workspace_id], references: [id])
-  users        User[]
-  documents    Document[]
+  id               String                     @id @default(uuid())
+  workspace_id     String
+  name             String
+  description      String?
+  is_default       Boolean                    @default(false)
+  workspace        Workspace                  @relation(fields: [workspace_id], references: [id])
+  authorized_users UserAuthorizedDepartment[]
+  users            User[]
+  documents        Document[]
+
+  @@index([workspace_id])
 }
 
 model User {
-  id                    String             @id @default(uuid())
-  department_id         String
-  role_id               String
-  email                 String             @unique
-  password_hash         String
-  active                Boolean            @default(true)
-  failed_login_attempts Int      @default(0)
-  locked_until          DateTime?
-  department            Department         @relation(fields: [department_id], references: [id])
-  role                  OrganizationRole   @relation(fields: [role_id], references: [id], onDelete: Restrict)
-  owned_organization    Organization?      @relation("OrganizationOwner")
-  documents             Document[]
-  refresh_tokens        RefreshToken[]
-  integration_tokens    IntegrationToken[]
+  id                     String                     @id @default(uuid())
+  department_id          String
+  role_id                String
+  email                  String                     @unique
+  password_hash          String
+  active                 Boolean                    @default(true)
+  failed_login_attempts  Int                        @default(0)
+  locked_until           DateTime?
+  department             Department                 @relation(fields: [department_id], references: [id])
+  role                   OrganizationRole           @relation(fields: [role_id], references: [id], onDelete: Restrict)
+  owned_organization     Organization?              @relation("OrganizationOwner")
+  authorized_departments UserAuthorizedDepartment[]
+  documents              Document[]
+  refresh_tokens         RefreshToken[]
+  integration_tokens     IntegrationToken[]
 
   @@index([role_id])
 }
@@ -68,6 +74,18 @@ model Document {
   department    Department           @relation(fields: [department_id], references: [id])
   uploader      User                 @relation(fields: [uploaded_by], references: [id])
   allowed_roles DocumentRoleAccess[]
+
+  @@index([department_id])
+}
+
+model UserAuthorizedDepartment {
+  user_id       String
+  department_id String
+  user          User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  department    Department @relation(fields: [department_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, department_id])
+  @@index([department_id])
 }
 
 model OrganizationRole {

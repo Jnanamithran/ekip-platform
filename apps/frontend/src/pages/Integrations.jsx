@@ -337,7 +337,7 @@ export default function Integrations() {
   }
 
   async function importSelected() {
-    if (!selectedDepartmentId && departments.length > 0) {
+    if (!selectedDepartmentId) {
       setError("Please select a target department for the imported files.");
       return;
     }

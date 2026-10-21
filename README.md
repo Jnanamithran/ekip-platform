@@ -115,6 +115,8 @@ docker compose ps
 
 - This is a prototype; production deployment, operational monitoring, backup
   and recovery, and independent security review are not complete.
+- The current user model grants access within one workspace. Additional
+  department grants do not grant access to another workspace.
 - Scanned-PDF visual processing requires the optional visual model stack and
   substantial compute resources. Text extraction/OCR behavior depends on the
   document and installed model/runtime support.
@@ -153,6 +155,12 @@ python -m pytest tests -q
 Some AI tests use live Qdrant or Ollama dependencies; check their fixtures and
 test markers before running them without those services. See
 [AI Handbook: tests](docs/08_AI_Handbook.md#tests).
+
+To apply database migrations to an existing development database, run
+`npx prisma migrate deploy` from `apps/backend`. The default-department
+migration marks an existing `General` department as the workspace default
+when available, otherwise marks the first existing department; it creates a
+`General` department only for a workspace that has none.
 ## Configuration
 
 | Variable | Used by | Purpose |
@@ -174,9 +182,10 @@ Google Drive OAuth is optional and requires a Google OAuth client. See
 [Google Drive integration](docs/06_Backend_Handbook.md#google-drive-apis).
 ## Use EKIP
 
-1. Create an organization, workspace, department, and first Owner account on
-   the Signup page. The Owner role is permanent — it cannot be changed,
-   transferred, or deleted.
+1. On Signup, provide the organization name, default workspace name, default
+   department name, and first Owner account details. The default department
+   cannot be deleted, though an authorized administrator can rename it. The
+   Owner role is permanent — it cannot be changed, transferred, or deleted.
 2. Sign in and upload a PDF, DOCX, XLSX, or TXT file.
 3. Wait for processing/indexing to finish, then ask a question on Search.
 4. Review source citations. PDF page previews are available when an original

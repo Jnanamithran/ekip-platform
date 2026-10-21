@@ -112,6 +112,7 @@ async function getMe(req, res) {
       is_owner: req.user.is_owner,
       department: req.user.department,
       department_id: req.user.department_id,
+      department_ids: req.user.department_ids,
       workspace_id: req.user.workspace_id,
       org_id: req.user.org_id,
     },
