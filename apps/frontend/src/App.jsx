@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
-import { navForRole } from "./lib/nav";
+import { navForUser } from "./lib/nav";
 import DashboardLayout from "./layouts/DashboardLayout";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -9,6 +9,9 @@ import Upload from "./pages/Upload";
 import ManageUsers from "./pages/ManageUsers";
 import WorkspaceSettings from "./pages/WorkspaceSettings";
 import Integrations from "./pages/Integrations";
+import RoleManagement from "./pages/RoleManagement";
+import AccountSettings from "./pages/AccountSettings";
+import Analytics from "./pages/Analytics";
 
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
@@ -16,10 +19,11 @@ function RequireAuth({ children }) {
   return user ? children : <Navigate to="/login" replace />;
 }
 
-function RequireRole({ path, children }) {
+function RequirePermission({ path, children }) {
   const { user } = useAuth();
-  const allowed = navForRole(user.role).some((item) => item.path === path);
-  return allowed ? children : <Navigate to="/app/search" replace />;
+  const allowed = navForUser(user).some((item) => item.path === path);
+  const fallback = navForUser(user)[0]?.path || "/app/account";
+  return allowed ? children : <Navigate to={fallback} replace />;
 }
 
 // Google OAuth lands the browser on /integrations?connected=google, but the
@@ -42,40 +46,60 @@ function AppRoutes() {
           </RequireAuth>
         }
       >
-        <Route index element={<Navigate to="search" replace />} />
-        <Route path="search" element={<Search />} />
+        <Route index element={<Navigate to="account" replace />} />
+        <Route
+          path="search"
+          element={<RequirePermission path="/app/search"><Search /></RequirePermission>}
+        />
         <Route
           path="upload"
           element={
-            <RequireRole path="/app/upload">
+            <RequirePermission path="/app/upload">
               <Upload />
-            </RequireRole>
+            </RequirePermission>
           }
         />
         <Route
           path="users"
           element={
-            <RequireRole path="/app/users">
+            <RequirePermission path="/app/users">
               <ManageUsers />
-            </RequireRole>
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="roles"
+          element={
+            <RequirePermission path="/app/roles">
+              <RoleManagement />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="analytics"
+          element={
+            <RequirePermission path="/app/analytics">
+              <Analytics />
+            </RequirePermission>
           }
         />
         <Route
           path="settings"
           element={
-            <RequireRole path="/app/settings">
+            <RequirePermission path="/app/settings">
               <WorkspaceSettings />
-            </RequireRole>
+            </RequirePermission>
           }
         />
         <Route
           path="integrations"
           element={
-            <RequireRole path="/app/integrations">
+            <RequirePermission path="/app/integrations">
               <Integrations />
-            </RequireRole>
+            </RequirePermission>
           }
         />
+        <Route path="account" element={<AccountSettings />} />
       </Route>
       {/* The Google OAuth callback redirects to /integrations (top level) —
           forward it into the app while preserving the query params. */}

@@ -1,10 +1,10 @@
 """
-PDF parser using PyMuPDF (fitz).
+PDF parser using PyMuPDF (pymupdf).
 Extracts text per page and flags documents that are likely scanned
 (image-only, no real text layer) so they don't silently produce empty chunks.
 """
 
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 import numpy as np
 from ..schema import IngestResult, PageContent, FileType
 
@@ -77,7 +77,7 @@ def try_ocr_page(pdf_path: str, page_num: int, doc=None) -> str:
         if doc is not None:
             arr = _render_page_to_rgb(doc, page_num)
         else:
-            with fitz.open(pdf_path) as own_doc:
+            with pymupdf.open(pdf_path) as own_doc:
                 arr = _render_page_to_rgb(own_doc, page_num)
 
         reader = _get_ocr_reader()
@@ -88,7 +88,7 @@ def try_ocr_page(pdf_path: str, page_num: int, doc=None) -> str:
 
 
 def parse_pdf(file_path: str, filename: str) -> IngestResult:
-    doc = fitz.open(file_path)
+    doc = pymupdf.open(file_path)
     pages = []
 
     for page_num, page in enumerate(doc, start=1):

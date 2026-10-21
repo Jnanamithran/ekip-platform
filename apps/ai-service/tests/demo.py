@@ -90,7 +90,7 @@ def main():
     DEMO_ORG        = "demo-org-001"
     DEMO_WORKSPACE  = "demo-workspace-001"
     DEMO_DEPT       = "demo-dept-001"
-    DEMO_ROLE       = "Admin"
+    DEMO_ROLE_ID    = "demo-role-owner"
     DEMO_UPLOADER   = "jnani"
 
     # ── imports (after sys.path set) ─────────────────────────────────────────
@@ -111,7 +111,7 @@ def main():
     print(f"  Document : {filename}")
     print(f"  Question : {question}")
     print(f"  Org      : {DEMO_ORG}")
-    print(f"  Role     : {DEMO_ROLE}")
+    print("  Role     : Owner")
     print()
 
     # ════════════════════════════════════════════════════════════════════════
@@ -153,7 +153,7 @@ def main():
         org_id        = DEMO_ORG,
         workspace_id  = DEMO_WORKSPACE,
         department_id = DEMO_DEPT,
-        allowed_roles = [DEMO_ROLE, "Manager", "Employee"],
+        allowed_role_ids = [DEMO_ROLE_ID],
         uploaded_by   = DEMO_UPLOADER,
     )
 
@@ -162,7 +162,7 @@ def main():
     ok(f"Vectors written     : {written}")
     ok(f"Model               : all-MiniLM-L6-v2  (384 dimensions)")
     ok(f"Vector DB           : Qdrant  (collection: ekip_documents)")
-    ok(f"RBAC attached       : org / workspace / dept / allowed_roles baked in at write time")
+    ok(f"RBAC attached       : org / workspace / dept / role IDs baked in at write time")
     print()
 
     # ════════════════════════════════════════════════════════════════════════
@@ -174,7 +174,8 @@ def main():
         org_id        = DEMO_ORG,
         workspace_id  = DEMO_WORKSPACE,
         department_id = DEMO_DEPT,
-        role          = DEMO_ROLE,
+        role_id       = DEMO_ROLE_ID,
+        allowed_role_ids = [DEMO_ROLE_ID],
     )
 
     # We call rbac_filter directly to show the count before search
@@ -182,7 +183,7 @@ def main():
     authorized = fetch_authorized_chunks(rbac_ctx)
 
     ok(f"Authorized chunks   : {len(authorized)}  (out of {written} total)")
-    ok(f"Filter fields       : org_id  |  workspace_id  |  department_id  |  role")
+    ok(f"Filter fields       : org_id  |  workspace_id  |  department_id  |  allowed role IDs")
     ok(f"Unauthorized chunks : never leave Qdrant — not filtered post-retrieval")
     print()
 
@@ -215,7 +216,7 @@ def main():
             FieldCondition(key="org_id",        match=MatchValue(value=DEMO_ORG)),
             FieldCondition(key="workspace_id",  match=MatchValue(value=DEMO_WORKSPACE)),
             FieldCondition(key="department_id", match=MatchValue(value=DEMO_DEPT)),
-            FieldCondition(key="allowed_roles", match=MatchValue(value=DEMO_ROLE)),
+            FieldCondition(key="allowed_role_ids", match=MatchValue(value=DEMO_ROLE_ID)),
         ]
     )
 

@@ -1,10 +1,26 @@
+# Install torch + torchvision FIRST with the CUDA build (not listed here on purpose):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# --- Visual retrieval / VLM ---
 colpali-engine==0.3.18
+transformers>=5.3.0,<6.0.0   # must satisfy colpali-engine 0.3.18
+accelerate
+bitsandbytes
+qwen-vl-utils
+
+# --- API ---
 fastapi==0.146.0
 uvicorn==0.54.0
+# Needed by Starlette/FastAPI for routes using Form(...) / File(...).
+# Without it, importing the app raises:
+#   RuntimeError: Form data requires "python-multipart" to be installed
+python-multipart==0.0.20
+
+# --- Documents / vector store ---
 pymupdf==1.28.2
 qdrant-client==1.19.1
 Pillow==13.0.0
-transformers>=4.45.0
+transformers>=4.45.0,<5.0.0
 bitsandbytes
 accelerate
 qwen-vl-utils

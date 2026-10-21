@@ -24,6 +24,11 @@ from embeddings.qdrant_client import get_client, COLLECTION_NAME  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
+ROLE_ADMIN = "role-admin"
+ROLE_MANAGER = "role-manager"
+ROLE_EMPLOYEE = "role-employee"
+ROLE_INTERN = "role-intern"
+
 
 def _delete_org(org_id: str) -> None:
     """Remove all points for an org — best-effort (Qdrant may be empty)."""
@@ -50,7 +55,7 @@ def cleanup_test_data():
     _delete_org("test-org-b-rbac")
 
 
-def seed_chunk(text, department_id, allowed_roles, doc_id):
+def seed_chunk(text, department_id, allowed_role_ids, doc_id):
     """Helper: seed a single chunk into Qdrant."""
     from chunking.schema import Chunk
 
@@ -60,7 +65,7 @@ def seed_chunk(text, department_id, allowed_roles, doc_id):
     )
     rbac = RBACMetadata(
         org_id="test-org-rbac", workspace_id="ws-test",
-        department_id=department_id, allowed_roles=allowed_roles,
+        department_id=department_id, allowed_role_ids=allowed_role_ids,
         uploaded_by="user-test",
     )
     embed_and_upsert([chunk], rbac)
@@ -73,20 +78,21 @@ def test_cross_department_isolation():
     """Dept A user must get zero results from Dept B content."""
     seed_chunk(
         "This is secret HR content about salaries and compensation",
-        department_id="dept-hr", allowed_roles=["Admin", "Manager"],
+        department_id="dept-hr", allowed_role_ids=[ROLE_ADMIN, ROLE_MANAGER],
         doc_id="doc-hr-secret",
     )
     seed_chunk(
         "This is engineering technical documentation about the API",
-        department_id="dept-eng", allowed_roles=["Admin", "Manager", "Employee"],
+        department_id="dept-eng",
+        allowed_role_ids=[ROLE_ADMIN, ROLE_MANAGER, ROLE_EMPLOYEE],
         doc_id="doc-eng-public",
     )
 
     # Engineering user queries
     rbac = RBACContext(
         org_id="test-org-rbac", workspace_id="ws-test",
-        department_id="dept-eng", role="Employee",
-        allowed_roles=["Employee"],
+        department_id="dept-eng", role_id=ROLE_EMPLOYEE,
+        allowed_role_ids=[ROLE_EMPLOYEE],
     )
     results = sparse_retrieve("salary compensation HR", rbac, top_k=10)
 
@@ -101,14 +107,14 @@ def test_role_isolation():
     """Employee must not see Admin-only documents."""
     seed_chunk(
         "Confidential board meeting minutes and executive decisions",
-        department_id="dept-eng", allowed_roles=["Admin"],
+        department_id="dept-eng", allowed_role_ids=[ROLE_ADMIN],
         doc_id="doc-admin-only",
     )
 
     rbac = RBACContext(
         org_id="test-org-rbac", workspace_id="ws-test",
-        department_id="dept-eng", role="Employee",
-        allowed_roles=["Employee"],
+        department_id="dept-eng", role_id=ROLE_EMPLOYEE,
+        allowed_role_ids=[ROLE_EMPLOYEE],
     )
     results = sparse_retrieve("board meeting executive decisions", rbac, top_k=10)
 
@@ -131,7 +137,7 @@ def test_cross_org_isolation():
     rbac_b = RBACMetadata(
         org_id="test-org-b-rbac", workspace_id="ws-b",
         department_id="dept-b",
-        allowed_roles=["Admin", "Manager", "Employee", "Intern"],
+        allowed_role_ids=[ROLE_ADMIN, ROLE_MANAGER, ROLE_EMPLOYEE, ROLE_INTERN],
         uploaded_by="user-b",
     )
     embed_and_upsert([chunk], rbac_b)
@@ -140,8 +146,8 @@ def test_cross_org_isolation():
     # Query as Org A user
     rbac_a = RBACContext(
         org_id="test-org-rbac", workspace_id="ws-test",
-        department_id="dept-eng", role="Admin",
-        allowed_roles=["Admin"],
+        department_id="dept-eng", role_id=ROLE_ADMIN,
+        allowed_role_ids=[ROLE_ADMIN],
     )
     results = sparse_retrieve("Project Phoenix secret", rbac_a, top_k=10)
 

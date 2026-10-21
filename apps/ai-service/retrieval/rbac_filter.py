@@ -27,18 +27,21 @@ def fetch_authorized_chunks(rbac: RBACContext) -> List[Dict[str, Any]]:
     """
     Returns the payloads (with chunk_id) of every chunk this user is
     authorized to see, scoped to their org/workspace/department, with
-    their role checked against each chunk's allowed_roles list.
+    their role ID checked against each chunk's allowed_role_ids list.
     """
     client = get_client()
 
-    query_filter = Filter(
-        must=[
-            FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
-            FieldCondition(key="workspace_id", match=MatchValue(value=rbac.workspace_id)),
-            FieldCondition(key="department_id", match=MatchValue(value=rbac.department_id)),
-            FieldCondition(key="allowed_roles", match=MatchAny(any=rbac.allowed_roles)),
-        ]
-    )
+    conditions = [
+        FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
+    ]
+    if not rbac.is_owner:
+        conditions.extend([
+            FieldCondition(
+                key="allowed_role_ids",
+                match=MatchAny(any=rbac.allowed_role_ids),
+            ),
+        ])
+    query_filter = Filter(must=conditions)
 
     records, _next_offset = client.scroll(
         collection_name=COLLECTION_NAME,

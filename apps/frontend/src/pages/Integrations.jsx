@@ -6,19 +6,14 @@ import {
   getDriveConnection,
   getDriveConnectUrl,
   getDriveFiles,
+  getDriveFolders,
+  getOrganizationRoles,
   importDriveFiles,
 } from "../lib/apiClient";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
-const ROLE_OPTIONS = ["Admin", "Manager", "Employee", "Intern"];
-// The backend caps each import call at 5 files — larger selections are
-// sent as sequential batches so nothing is silently dropped.
 const MAX_FILES_PER_IMPORT = 5;
-
-function defaultRolesFor(role) {
-  return role && ROLE_OPTIONS.includes(role) ? [role] : [...ROLE_OPTIONS];
-}
 
 function formatFileSize(bytes) {
   const size = Number(bytes);
@@ -34,11 +29,11 @@ function formatModifiedTime(value) {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
 }
 
-function RoleSelector({ filename, selected, onChange }) {
-  function toggle(role) {
-    const next = selected.includes(role)
-      ? selected.filter((r) => r !== role)
-      : [...selected, role];
+function RoleSelector({ filename, selected, onChange, roles, ownRoleId, canManageAccess }) {
+  function toggle(roleId) {
+    const next = selected.includes(roleId)
+      ? selected.filter((id) => id !== roleId)
+      : [...selected, roleId];
     onChange(next);
   }
 
@@ -48,15 +43,16 @@ function RoleSelector({ filename, selected, onChange }) {
         Who can search &ldquo;{filename}&rdquo;?
       </p>
       <div className="flex flex-wrap gap-3">
-        {ROLE_OPTIONS.map((role) => (
-          <label key={role} className="flex cursor-pointer items-center gap-1.5 text-sm text-ink-soft">
+        {roles.map((role) => (
+          <label key={role.id} className="flex cursor-pointer items-center gap-1.5 text-sm text-ink-soft">
             <input
               type="checkbox"
-              checked={selected.includes(role)}
-              onChange={() => toggle(role)}
+              checked={selected.includes(role.id)}
+              disabled={!canManageAccess || role.id === ownRoleId}
+              onChange={() => toggle(role.id)}
               className="h-4 w-4 rounded accent-index"
             />
-            {role}
+            {role.name}
           </label>
         ))}
       </div>
@@ -75,24 +71,54 @@ export default function Integrations() {
   const [connected, setConnected] = useState(false);
   const [checking, setChecking] = useState(true);
   const [driveFiles, setDriveFiles] = useState([]);
-  const [nextPageToken, setNextPageToken] = useState(null);
+  const [driveFolders, setDriveFolders] = useState([]);
+  const [folderStack, setFolderStack] = useState([]);
+  const [filePageToken, setFilePageToken] = useState(null);
+  const [folderPageToken, setFolderPageToken] = useState(null);
+  const [roles, setRoles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState({});
+  const [selectedFolderIds, setSelectedFolderIds] = useState([]);
   const [fileRoles, setFileRoles] = useState({});
   const [importing, setImporting] = useState(false);
   const [importResults, setImportResults] = useState([]);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [error, setError] = useState(() => {
+    const status = searchParams.get("error");
+    return status
+      ? status === "access_denied"
+        ? "Google Drive connection was not granted."
+        : "Google Drive connection failed. Please try again."
+      : "";
+  });
+  const [notice, setNotice] = useState(() =>
+    searchParams.get("connected") === "google" ? "Google Drive connected." : ""
+  );
   const [connecting, setConnecting] = useState(false);
 
-  const loadFiles = useCallback(async (pageToken) => {
+  const loadItems = useCallback(async (parentId, filePage, folderPage) => {
     setLoadingFiles(true);
     setError("");
     try {
-      const res = await getDriveFiles(pageToken);
-      const files = res.files ?? [];
-      setDriveFiles((prev) => (pageToken ? [...prev, ...files] : files));
-      setNextPageToken(res.next_page_token ?? null);
+      const [filesResult, foldersResult] = await Promise.all([
+        filePage !== undefined || folderPage === undefined
+          ? getDriveFiles(parentId, filePage)
+          : Promise.resolve(null),
+        folderPage !== undefined || filePage === undefined
+          ? getDriveFolders(parentId, folderPage)
+          : Promise.resolve(null),
+      ]);
+      if (filesResult) {
+        setDriveFiles((previous) => filePage
+          ? [...previous, ...(filesResult.files ?? [])]
+          : filesResult.files ?? []);
+        setFilePageToken(filesResult.next_page_token ?? null);
+      }
+      if (foldersResult) {
+        setDriveFolders((previous) => folderPage
+          ? [...previous, ...(foldersResult.folders ?? [])]
+          : foldersResult.folders ?? []);
+        setFolderPageToken(foldersResult.next_page_token ?? null);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -107,25 +133,27 @@ export default function Integrations() {
     const oauthStatus = searchParams.get("connected");
     const oauthError = searchParams.get("error");
     if (oauthStatus || oauthError) {
-      if (active) {
-        if (oauthStatus === "google") {
-          setNotice("Google Drive connected.");
-        } else {
-          setError(
-            oauthError === "access_denied"
-              ? "Google Drive connection was not granted."
-              : "Google Drive connection failed. Please try again."
-          );
-        }
-        setSearchParams({}, { replace: true });
-      }
+      setSearchParams({}, { replace: true });
     }
     getDriveConnection()
-      .then((res) => {
+      .then(async (res) => {
         if (!active) return;
         const isConnected = Boolean(res.connected);
         setConnected(isConnected);
-        if (isConnected) loadFiles();
+        if (isConnected) {
+          const roleRequest = user?.is_owner ||
+            user?.permissions?.includes("documents:manage_access")
+            ? getOrganizationRoles().then((result) => setRoles(result.roles ?? []))
+            : Promise.resolve(setRoles([{
+              id: user.role_id,
+              name: user.role,
+              is_owner: user.is_owner,
+            }]));
+          await Promise.all([
+            loadItems(null),
+            roleRequest,
+          ]);
+        }
       })
       .catch((err) => {
         if (active) setError(err.message);
@@ -136,7 +164,54 @@ export default function Integrations() {
     return () => {
       active = false;
     };
-  }, [loadFiles, searchParams, setSearchParams]);
+  }, [loadItems, searchParams, setSearchParams, user]);
+
+  const canManageAccess =
+    Boolean(user?.is_owner) || user?.permissions?.includes("documents:manage_access");
+  const ownRoleMissing = Object.entries(selectedFiles).some(
+    ([fileId, selected]) => selected &&
+      !(fileRoles[fileId] ?? [user?.role_id]).includes(user?.role_id)
+  );
+  const emptyRoles = Object.entries(selectedFiles).some(
+    ([fileId, selected]) => selected &&
+      !(fileRoles[fileId] ?? [user?.role_id]).length
+  );
+  const selectedEntries = Object.entries(selectedFiles).filter(([, selected]) => selected);
+  const importDisabled =
+    importing || selectedEntries.length === 0 || selectedEntries.length > MAX_FILES_PER_IMPORT ||
+    emptyRoles || ownRoleMissing;
+
+  function selectionDefault() {
+    return [user.role_id];
+  }
+
+  function toggleSelection(item) {
+    setSelectedFiles((previous) => ({ ...previous, [item.id]: !previous[item.id] }));
+    if (item.is_folder) {
+      setSelectedFolderIds((previous) => previous.includes(item.id)
+        ? previous.filter((id) => id !== item.id)
+        : [...previous, item.id]);
+    }
+    setFileRoles((previous) =>
+      previous[item.id] ? previous : { ...previous, [item.id]: selectionDefault() }
+    );
+  }
+
+  function openFolder(folder) {
+    setFolderStack((previous) => [...previous, folder]);
+    setDriveFiles([]);
+    setDriveFolders([]);
+    loadItems(folder.id);
+  }
+
+  function navigateToFolder(index) {
+    const nextStack = folderStack.slice(0, index + 1);
+    const parentId = nextStack.length ? nextStack[nextStack.length - 1].id : null;
+    setFolderStack(nextStack);
+    setDriveFiles([]);
+    setDriveFolders([]);
+    loadItems(parentId);
+  }
 
   async function connectDrive() {
     setConnecting(true);
@@ -158,8 +233,12 @@ export default function Integrations() {
       await disconnectDrive();
       setConnected(false);
       setDriveFiles([]);
-      setNextPageToken(null);
+      setDriveFolders([]);
+      setFolderStack([]);
+      setFilePageToken(null);
+      setFolderPageToken(null);
       setSelectedFiles({});
+      setSelectedFolderIds([]);
       setFileRoles({});
       setImportResults([]);
       setNotice("Google Drive disconnected.");
@@ -168,32 +247,12 @@ export default function Integrations() {
     }
   }
 
-  function toggleFile(fileId) {
-    setSelectedFiles((prev) => ({ ...prev, [fileId]: !prev[fileId] }));
-    setFileRoles((prev) =>
-      prev[fileId] ? prev : { ...prev, [fileId]: defaultRolesFor(user?.role) }
-    );
-  }
-
-  const selectedEntries = Object.entries(selectedFiles).filter(([, selected]) => selected);
-
-  // Backend rejects roles that exclude the importer — keep their own role
-  // checked so a valid selection can never 400.
-  const ownRoleMissing = selectedEntries.some(
-    ([fileId]) => !(fileRoles[fileId] ?? defaultRolesFor(user?.role)).includes(user?.role)
-  );
-  const emptyRoles = selectedEntries.some(
-    ([fileId]) => (fileRoles[fileId] ?? defaultRolesFor(user?.role)).length === 0
-  );
-  const importDisabled =
-    importing || selectedEntries.length === 0 || emptyRoles || ownRoleMissing;
-
   async function importSelected() {
     const files = selectedEntries.map(([fileId]) => ({
       file_id: fileId,
-      allowed_roles: fileRoles[fileId] ?? defaultRolesFor(user?.role),
+      is_folder: selectedFolderIds.includes(fileId),
+      allowed_role_ids: fileRoles[fileId] ?? [user.role_id],
     }));
-    // filename is display-only: the backend reads name/type from Drive.
 
     if (!files.length || importDisabled) return;
     setImporting(true);
@@ -201,15 +260,12 @@ export default function Integrations() {
     setNotice("");
     const allResults = [];
     try {
-      for (let i = 0; i < files.length; i += MAX_FILES_PER_IMPORT) {
-        const batch = files.slice(i, i + MAX_FILES_PER_IMPORT);
-        // Sequential batches: each file can take minutes server-side.
-        // eslint-disable-next-line no-await-in-loop
-        const res = await importDriveFiles(batch);
-        allResults.push(...(res.results ?? []));
-      }
+      const res = await importDriveFiles(files);
+      allResults.push(...(res.results ?? []));
       setImportResults((prev) => [...allResults, ...prev]);
       setSelectedFiles({});
+      setSelectedFolderIds([]);
+      setFileRoles({});
       const ok = allResults.filter((r) => r.status === "success").length;
       const total = allResults.length;
       setNotice(`Imported ${ok} of ${total} file${total === 1 ? "" : "s"}.`);
@@ -231,6 +287,11 @@ export default function Integrations() {
         <p className="text-sm text-slate">
           Connect Google Drive and import documents with per-file access control.
         </p>
+        {!connected && !user?.is_owner && !user?.permissions?.includes("drive:connect") && (
+          <p className="mt-2 text-sm text-slate">
+            A role with Drive connection permission must connect Google Drive before you can import.
+          </p>
+        )}
       </div>
 
       {notice && (
@@ -252,11 +313,11 @@ export default function Integrations() {
               {connected ? "Connected" : "Not connected"}
             </p>
           </div>
-          {!connected ? (
+          {!connected && (user?.is_owner || user?.permissions?.includes("drive:connect")) ? (
             <Button onClick={connectDrive} disabled={connecting}>
               {connecting ? "Connecting…" : "Connect Google Drive"}
             </Button>
-          ) : (
+          ) : connected && (
             <button
               type="button"
               onClick={handleDisconnect}
@@ -269,25 +330,62 @@ export default function Integrations() {
 
         {connected && (
           <div>
-            <h3 className="mb-3 font-medium text-ink">Your Drive files</h3>
-            {driveFiles.length > 0 ? (
+            <p className="mb-4 rounded-md border border-hairline bg-paper-raised p-3 text-xs text-slate">
+              EKIP requests read-only access to files in your Google Drive. Imports are limited to
+              files and folders you select here, but Google’s authorization scope itself is broader
+              than those selections. You can disconnect EKIP or revoke access in your Google Account.
+            </p>
+            <h3 className="mb-3 font-medium text-ink">Browse and select Drive items</h3>
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+              <button
+                type="button"
+                className="text-index hover:underline"
+                onClick={() => navigateToFolder(-1)}
+              >
+                My Drive
+              </button>
+              {folderStack.map((folder, index) => (
+                <span key={folder.id} className="flex items-center gap-2">
+                  <span className="text-slate">/</span>
+                  <button
+                    type="button"
+                    className="text-index hover:underline"
+                    onClick={() => navigateToFolder(index)}
+                  >
+                    {folder.name}
+                  </button>
+                </span>
+              ))}
+            </div>
+            {driveFiles.length + driveFolders.length > 0 ? (
               <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-                {driveFiles.map((file) => {
-                  const checked = Boolean(selectedFiles[file.id]);
-                  const roles = fileRoles[file.id] ?? defaultRolesFor(user?.role);
+                {[...driveFolders.map((folder) => ({ ...folder, is_folder: true })), ...driveFiles].map((item) => {
+                  const checked = Boolean(selectedFiles[item.id]);
+                  const selectedRoles = fileRoles[item.id] ?? [user.role_id];
                   return (
-                    <div key={file.id} className="rounded-md border border-hairline p-3">
+                    <div key={item.id} className="rounded-md border border-hairline p-3">
                       <div className="flex items-center gap-2">
                         <input
                           type="checkbox"
                           checked={checked}
-                          onChange={() => toggleFile(file.id)}
-                          aria-label={`Select ${file.name}`}
+                          onChange={() => toggleSelection(item)}
+                          aria-label={`Select ${item.name}`}
                           className="h-4 w-4 rounded accent-index"
                         />
-                        <span className="truncate text-sm font-medium text-ink">{file.name}</span>
+                        <span className="truncate text-sm font-medium text-ink">
+                          {item.is_folder ? "📁 " : ""}{item.name}
+                        </span>
+                        {item.is_folder && (
+                          <button
+                            type="button"
+                            className="text-xs text-index hover:underline"
+                            onClick={() => openFolder(item)}
+                          >
+                            Open
+                          </button>
+                        )}
                         <span className="ml-auto shrink-0 text-xs text-slate-light">
-                          {[formatFileSize(file.size), formatModifiedTime(file.modifiedTime)]
+                          {[formatFileSize(item.size), formatModifiedTime(item.modifiedTime)]
                             .filter(Boolean)
                             .join(" · ")}
                         </span>
@@ -295,10 +393,13 @@ export default function Integrations() {
 
                       {checked && (
                         <RoleSelector
-                          filename={file.name}
-                          selected={roles}
+                          filename={item.name}
+                          selected={selectedRoles}
+                          roles={roles}
+                          ownRoleId={user.role_id}
+                          canManageAccess={canManageAccess}
                           onChange={(next) =>
-                            setFileRoles((prev) => ({ ...prev, [file.id]: next }))
+                            setFileRoles((prev) => ({ ...prev, [item.id]: next }))
                           }
                         />
                       )}
@@ -309,19 +410,37 @@ export default function Integrations() {
             ) : (
               !loadingFiles && (
                 <p className="text-sm text-slate">
-                  No importable files found (PDF, DOCX, XLSX, TXT).
+                  No supported files or folders found here. Supported files: PDF, DOCX, XLSX, TXT.
                 </p>
               )
             )}
 
-            {nextPageToken && (
+            {folderPageToken && (
               <Button
                 variant="secondary"
                 className="mt-3 w-full"
                 disabled={loadingFiles}
-                onClick={() => loadFiles(nextPageToken)}
+                onClick={() => loadItems(
+                  folderStack.at(-1)?.id ?? null,
+                  undefined,
+                  folderPageToken
+                )}
               >
-                {loadingFiles ? "Loading…" : "Load more files"}
+                {loadingFiles ? "Loading…" : "Load more folders"}
+              </Button>
+            )}
+            {filePageToken && (
+              <Button
+                variant="secondary"
+                className="mt-3 w-full"
+                disabled={loadingFiles}
+                onClick={() => loadItems(
+                  folderStack.at(-1)?.id ?? null,
+                  filePageToken,
+                  undefined
+                )}
+              >
+                {loadingFiles ? "Loading…" : "Load more"}
               </Button>
             )}
 
@@ -336,10 +455,15 @@ export default function Integrations() {
             </Button>
             {ownRoleMissing && selectedEntries.length > 0 && (
               <p role="alert" className="mt-2 text-xs text-danger">
-                Each file must include your own role ({user?.role}).
+                Each selection must include your own role ({user?.role}).
               </p>
             )}
-            {loadingFiles && driveFiles.length === 0 && (
+            {selectedEntries.length > MAX_FILES_PER_IMPORT && (
+              <p role="alert" className="mt-2 text-xs text-danger">
+                Select no more than {MAX_FILES_PER_IMPORT} files or folders per import.
+              </p>
+            )}
+            {loadingFiles && driveFiles.length + driveFolders.length === 0 && (
               <p className="mt-2 text-sm text-slate">Loading Drive files…</p>
             )}
           </div>

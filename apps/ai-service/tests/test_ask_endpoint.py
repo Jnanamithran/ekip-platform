@@ -1,8 +1,60 @@
 from types import SimpleNamespace
 
+import httpx
+import pytest
+from qdrant_client.http.exceptions import UnexpectedResponse
 from fastapi.testclient import TestClient
 
 import main
+
+
+def test_missing_visual_collection_uses_text_pipeline(monkeypatch):
+    def missing_visual_collection(**kwargs):
+        raise UnexpectedResponse(
+            status_code=404,
+            reason_phrase='Not Found',
+            content=b'Collection does not exist',
+            headers=httpx.Headers(),
+        )
+
+    monkeypatch.setattr(
+        main,
+        'get_client',
+        lambda: SimpleNamespace(scroll=missing_visual_collection),
+    )
+
+    assert main.has_visual_docs({
+        'org_id': 'org-1',
+        'workspace_id': 'workspace-1',
+        'department_id': 'department-1',
+        'role_id': 'role-admin',
+        'is_owner': False,
+    }) is False
+
+
+def test_unexpected_visual_collection_error_is_not_swallowed(monkeypatch):
+    def qdrant_unavailable(**kwargs):
+        raise UnexpectedResponse(
+            status_code=503,
+            reason_phrase='Service Unavailable',
+            content=b'Qdrant unavailable',
+            headers=httpx.Headers(),
+        )
+
+    monkeypatch.setattr(
+        main,
+        'get_client',
+        lambda: SimpleNamespace(scroll=qdrant_unavailable),
+    )
+
+    with pytest.raises(UnexpectedResponse):
+        main.has_visual_docs({
+            'org_id': 'org-1',
+            'workspace_id': 'workspace-1',
+            'department_id': 'department-1',
+            'role_id': 'role-admin',
+            'is_owner': False,
+        })
 
 
 def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
@@ -43,7 +95,8 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
                 'org_id': 'org-1',
                 'workspace_id': 'workspace-1',
                 'department_id': 'department-1',
-                'role': 'Admin',
+                'role_id': 'role-admin',
+                'is_owner': False,
             },
             'token': 'test-token',
             'request_id': 'test-request-1',

@@ -7,7 +7,7 @@ import httpx
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from pydantic import ValidationError
 from typing import List, Optional
 
@@ -36,8 +36,6 @@ def health():
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
-ALLOWED_ROLES = {"Admin", "Owner", "Manager", "Employee", "Intern"}
-
 VISUAL_COLLECTION = "ekip_visual_documents"
 VISUAL_SERVICE_URL = os.getenv("VISUAL_SERVICE_URL", "http://ai-service-visual:8001")
 
@@ -46,26 +44,10 @@ class RBACInfo(BaseModel):
     org_id: str
     workspace_id: str
     department_id: str
-    role: str
-    allowed_roles: Optional[List[str]] = None   # multiple roles allowed to see uploaded chunks
+    role_id: str
+    is_owner: bool = False
+    allowed_role_ids: Optional[List[str]] = None
     user_id: Optional[str] = None               # real uploader id, for audit trail
-
-    @field_validator("allowed_roles", mode="after")
-    @classmethod
-    def _validate_allowed_roles(
-        cls, value: Optional[List[str]]
-    ) -> Optional[List[str]]:
-        if value is None:
-            return None
-        seen: List[str] = []
-        for r in value:
-            if r not in ALLOWED_ROLES:
-                raise ValueError(
-                    f"Invalid role: {r!r}. Must be one of {sorted(ALLOWED_ROLES)}"
-                )
-            if r not in seen:
-                seen.append(r)
-        return seen or None
 
 
 class AskRequest(BaseModel):
@@ -125,12 +107,17 @@ def has_visual_docs(rbac_dict: dict) -> bool:
     returns True when at least one accessible visual page exists.
     """
     client = get_client()
-    rbac_filter = Filter(must=[
+    conditions = [
         FieldCondition(key="org_id", match=MatchValue(value=rbac_dict["org_id"])),
-        FieldCondition(key="workspace_id", match=MatchValue(value=rbac_dict["workspace_id"])),
-        FieldCondition(key="department_id", match=MatchValue(value=rbac_dict["department_id"])),
-        FieldCondition(key="allowed_roles", match=MatchValue(value=rbac_dict["role"])),
-    ])
+    ]
+    if not rbac_dict["is_owner"]:
+        conditions.extend([
+            FieldCondition(
+                key="allowed_role_ids",
+                match=MatchValue(value=rbac_dict["role_id"]),
+            ),
+        ])
+    rbac_filter = Filter(must=conditions)
     try:
         result = client.scroll(
             collection_name=VISUAL_COLLECTION,
@@ -141,7 +128,7 @@ def has_visual_docs(rbac_dict: dict) -> bool:
     except UnexpectedResponse as exc:
         # The collection does not exist until the first scanned document has
         # been ingested — treat that as "no visual documents yet".
-        if exc.status == 404:
+        if exc.status_code == 404:
             return False
         raise
     except ValueError:
@@ -162,16 +149,22 @@ async def run_text_pipeline(query: str, rbac: RBACContext, token: str, request_i
         )
 
     # --- Step 6: hybrid retrieval (dense + sparse + RRF fusion) ---
+    # Runs in a thread: Qdrant network calls + embedding encode are blocking.
     await update_search('Searching your authorized documents')
-    chunks = hybrid_retrieve(query=query, rbac=rbac, top_k=12)
+    chunks = await asyncio.to_thread(
+        hybrid_retrieve, query=query, rbac=rbac, top_k=12
+    )
 
     # --- Step 7: cross-encoder rerank ---
+    # CPU-bound model inference — offload so the event loop stays free.
     await update_search(f'Ranking {len(chunks)} relevant passages')
-    reranked = rerank(query=query, chunks=chunks, top_n=4)
+    reranked = await asyncio.to_thread(rerank, query=query, chunks=chunks, top_n=4)
 
     # --- Step 8: Ollama LLM generation ---
+    # Ollama chat is a blocking HTTP call — run off the event loop.
     await update_search('Drafting an answer from the selected passages')
-    generation_result = generate_answer(
+    generation_result = await asyncio.to_thread(
+        generate_answer,
         query=query,
         chunks=reranked,
     )
@@ -213,7 +206,8 @@ async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
                 'org_id': rbac_dict['org_id'],
                 'workspace_id': rbac_dict['workspace_id'],
                 'department_id': rbac_dict['department_id'],
-                'role': rbac_dict['role'],
+                'role_id': rbac_dict['role_id'],
+                'is_owner': rbac_dict['is_owner'],
             },
         )
         response.raise_for_status()
@@ -258,13 +252,14 @@ async def ask(req: AskRequest):
     text and visual pipelines run in parallel and their results are merged.
     '''
     # Normalize the incoming RBAC shape into the retrieval-layer contract
-    allowed_roles = req.rbac.allowed_roles or [req.rbac.role]
+    allowed_role_ids = req.rbac.allowed_role_ids or [req.rbac.role_id]
     rbac = RBACContext(
         org_id        = req.rbac.org_id,
         workspace_id  = req.rbac.workspace_id,
         department_id = req.rbac.department_id,
-        role          = req.rbac.role,
-        allowed_roles = allowed_roles,
+        role_id       = req.rbac.role_id,
+        is_owner      = req.rbac.is_owner,
+        allowed_role_ids = allowed_role_ids,
     )
 
     if not req.token:
@@ -274,7 +269,8 @@ async def ask(req: AskRequest):
         'org_id':        req.rbac.org_id,
         'workspace_id':  req.rbac.workspace_id,
         'department_id': req.rbac.department_id,
-        'role':          req.rbac.role,
+        'role_id':       req.rbac.role_id,
+        'is_owner':      req.rbac.is_owner,
     }
 
     visual_available = has_visual_docs(rbac_dict)
@@ -375,8 +371,7 @@ async def ingest(
                     'org_id':        rbac_info.org_id,
                     'workspace_id':  rbac_info.workspace_id,
                     'department_id': rbac_info.department_id,
-                    'role':          rbac_info.role,
-                    'allowed_roles': rbac_info.allowed_roles or [rbac_info.role],
+                    'allowed_role_ids': rbac_info.allowed_role_ids or [rbac_info.role_id],
                     'uploaded_by':   rbac_info.user_id
                                      or 'user-' + str(uuid.uuid4())[:8],
                 }
@@ -415,12 +410,12 @@ async def ingest(
             from embeddings.service import embed_and_upsert
             from embeddings.rbac_schema import RBACMetadata
 
-            allowed_roles = rbac_info.allowed_roles or [rbac_info.role]
+            allowed_role_ids = rbac_info.allowed_role_ids or [rbac_info.role_id]
             rbac_metadata = RBACMetadata(
                 org_id       = rbac_info.org_id,
                 workspace_id = rbac_info.workspace_id,
                 department_id = rbac_info.department_id,
-                allowed_roles = allowed_roles,
+                allowed_role_ids = allowed_role_ids,
                 uploaded_by  = rbac_info.user_id or 'user-' + str(uuid.uuid4())[:8],
             )
 

@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenvs — these are ~5GB and must never enter the build context.
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Runtime artifacts: page images and uploaded PDFs are written to a Docker
+# volume at /app/uploads, so they are not needed in the image.
+uploads/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# Local tooling / secrets
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+tests/
+test_*.py
+*.log

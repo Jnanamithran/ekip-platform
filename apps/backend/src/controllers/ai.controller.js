@@ -3,7 +3,7 @@ const FORM_DATA = require('form-data');
 const fs = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { PrismaClient, Role } = require('@prisma/client');
+const { PrismaClient } = require('@prisma/client');
 
 // AI service base URL (set via env in Docker; default to localhost for dev)
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
@@ -37,8 +37,64 @@ function rbacFromReq(req) {
     org_id       : req.user.org_id,
     workspace_id : req.user.workspace_id,
     department_id: req.user.department_id,
-    role         : req.user.role,
+    role_id      : req.user.role_id,
+    is_owner     : req.user.is_owner,
   };
+}
+
+function documentAccessWhere(req, { manageAccess = false } = {}) {
+  const canManageAccess =
+    manageAccess &&
+    (req.user.is_owner || req.user.permissions.includes('documents:manage_access'));
+  return {
+    department: {
+      workspace: { org_id: req.user.org_id },
+    },
+    ...(!req.user.is_owner && !canManageAccess && {
+      allowed_roles: { some: { role_id: req.user.role_id } },
+    }),
+  };
+}
+
+function qdrantAccessFilter(req, { manageAccess = false } = {}) {
+  const must = [{ key: 'org_id', match: { value: req.user.org_id } }];
+  const canManageAccess =
+    manageAccess &&
+    (req.user.is_owner || req.user.permissions.includes('documents:manage_access'));
+  if (!req.user.is_owner && !canManageAccess) {
+    must.push({ key: 'allowed_role_ids', match: { value: req.user.role_id } });
+  }
+  return { must };
+}
+
+async function validateAllowedRoleIds(allowedRoleIds, user) {
+  if (
+    !Array.isArray(allowedRoleIds) ||
+    !allowedRoleIds.length ||
+    allowedRoleIds.some((id) => typeof id !== 'string') ||
+    new Set(allowedRoleIds).size !== allowedRoleIds.length
+  ) {
+    return { error: 'allowed_role_ids must be a non-empty list of role IDs' };
+  }
+
+  const roles = await prisma.organizationRole.findMany({
+    where: { id: { in: allowedRoleIds }, org_id: user.org_id },
+    select: { id: true },
+  });
+  if (roles.length !== allowedRoleIds.length) {
+    return { error: 'Every document access role must belong to your organization' };
+  }
+  if (!user.is_owner && !allowedRoleIds.includes(user.role_id)) {
+    return { error: 'Document access must include your own role' };
+  }
+  if (
+    !user.is_owner &&
+    !user.permissions.includes('documents:manage_access') &&
+    (allowedRoleIds.length !== 1 || allowedRoleIds[0] !== user.role_id)
+  ) {
+    return { error: 'You do not have permission to assign document access roles' };
+  }
+  return { roleIds: allowedRoleIds };
 }
 
 // --- Health check ---
@@ -220,16 +276,16 @@ async function getAskProgress(req, res) {
 
 // Shared by normal uploads and Google Drive imports.
 // Returns { status, body } so each caller decides how to reply.
-async function ingestDocument({ user, token, buffer, filename: rawFilename, mimetype, allowedRoles }) {
-  // One list of roles is saved in Postgres AND sent to the AI service (Qdrant),
-  // so the document list and search can never disagree.
-  if (
-    !Array.isArray(allowedRoles) ||
-    !allowedRoles.length ||
-    !allowedRoles.every((r) => Object.values(Role).includes(r))
-  ) {
-    return { status: 400, body: { error: 'allowed_roles must be a non-empty list of valid roles' } };
-  }
+async function ingestDocument({
+  user,
+  token,
+  buffer,
+  filename: rawFilename,
+  mimetype,
+  allowedRoleIds,
+}) {
+  const access = await validateAllowedRoleIds(allowedRoleIds, user);
+  if (access.error) return { status: 400, body: { error: access.error } };
 
   const documentId = randomUUID();
   let documentCreated = false;
@@ -252,7 +308,7 @@ async function ingestDocument({ user, token, buffer, filename: rawFilename, mime
         stage: 'File received',
         progress: 5,
         uploaded_by: user.user_id,
-        allowed_roles: allowedRoles,
+        allowed_roles: { create: access.roleIds.map((role_id) => ({ role_id })) },
       },
     });
     documentCreated = true;
@@ -269,7 +325,7 @@ async function ingestDocument({ user, token, buffer, filename: rawFilename, mime
         form.append('rbac', JSON.stringify({
       ...rbacFromReq({ user }),
       user_id: user.user_id,
-      allowed_roles: allowedRoles,
+      allowed_role_ids: access.roleIds,
     }));
     form.append('token', token || '');
     form.append('document_id', documentId);
@@ -330,18 +386,26 @@ async function ingest(req, res) {
   if (!req.file) {
     return res.status(400).json({ error: 'A document file is required' });
   }
+  let allowedRoleIds = [req.user.role_id];
+  if (req.body.allowed_role_ids !== undefined) {
+    try {
+      allowedRoleIds = JSON.parse(req.body.allowed_role_ids);
+    } catch {
+      return res.status(400).json({ error: 'allowed_role_ids must be valid JSON' });
+    }
+  }
   const { status, body } = await ingestDocument({
     user: req.user,
     token: req.headers['x-ai-token'] || '',
     buffer: req.file.buffer,
     filename: req.file.originalname,
     mimetype: req.file.mimetype,
-    allowedRoles: [req.user.role],
+    allowedRoleIds,
   });
   res.status(status).json(body);
 }
 
-async function deleteDocumentVectors(collection, documentId) {
+async function deleteDocumentVectors(collection, documentId, orgId) {
   try {
     await axios.get(`${QDRANT_URL}/collections/${collection}`);
   } catch (err) {
@@ -353,7 +417,10 @@ async function deleteDocumentVectors(collection, documentId) {
     `${QDRANT_URL}/collections/${collection}/points/delete?wait=true`,
     {
       filter: {
-        must: [{ key: 'document_id', match: { value: documentId } }],
+        must: [
+          { key: 'document_id', match: { value: documentId } },
+          { key: 'org_id', match: { value: orgId } },
+        ],
       },
     }
   );
@@ -362,16 +429,86 @@ async function deleteDocumentVectors(collection, documentId) {
   }
 }
 
+async function setDocumentVectorAccess(collection, documentId, orgId, roleIds) {
+  try {
+    await axios.get(`${QDRANT_URL}/collections/${collection}`);
+  } catch (err) {
+    if (err.response?.status === 404) return;
+    throw err;
+  }
+  const response = await axios.post(
+    `${QDRANT_URL}/collections/${collection}/points/payload?wait=true`,
+    {
+      payload: { allowed_role_ids: roleIds },
+      filter: {
+        must: [
+          { key: 'document_id', match: { value: documentId } },
+          { key: 'org_id', match: { value: orgId } },
+        ],
+      },
+    }
+  );
+  if (response.data.status !== 'ok') {
+    throw new Error(`Qdrant did not confirm access update in ${collection}`);
+  }
+}
+
+async function updateDocumentAccess(req, res) {
+  const { id } = req.params;
+  const { allowed_role_ids: allowedRoleIds } = req.body || {};
+  const access = await validateAllowedRoleIds(allowedRoleIds, req.user);
+  if (access.error) return res.status(400).json({ error: access.error });
+
+  try {
+    const document = await prisma.document.findFirst({
+      where: { id, department: { workspace: { org_id: req.user.org_id } } },
+      select: { id: true, department_id: true, status: true },
+    });
+    if (!document) return res.status(404).json({ error: 'Document not found' });
+    if (document.status === 'Processing') {
+      return res.status(409).json({ error: 'Wait for processing to finish before changing access' });
+    }
+
+    for (const collection of ['ekip_documents', 'ekip_visual_documents']) {
+      await setDocumentVectorAccess(collection, id, req.user.org_id, []);
+    }
+
+    await prisma.$transaction([
+      prisma.documentRoleAccess.deleteMany({ where: { document_id: id } }),
+      prisma.documentRoleAccess.createMany({
+        data: access.roleIds.map((role_id) => ({ document_id: id, role_id })),
+      }),
+    ]);
+
+    for (const collection of ['ekip_documents', 'ekip_visual_documents']) {
+      await setDocumentVectorAccess(collection, id, req.user.org_id, access.roleIds);
+    }
+    return res.json({ updated: true, allowed_role_ids: access.roleIds });
+  } catch (err) {
+    console.error('[ai] document access update failed:', err.message);
+    return res.status(500).json({ error: 'Failed to update document access; re-index the document if search access is incomplete' });
+  }
+}
+
 async function reindexDocument(req, res) {
   const { id } = req.params;
 
   try {
-    const document = await prisma.document.findUnique({ where: { id } });
+    const document = await prisma.document.findFirst({
+      where: { id, ...documentAccessWhere(req) },
+      include: {
+        allowed_roles: { select: { role_id: true } },
+        department: {
+          select: {
+            id: true,
+            workspace_id: true,
+            workspace: { select: { org_id: true } },
+          },
+        },
+      },
+    });
     if (!document) {
       return res.status(404).json({ error: 'Document not found.' });
-    }
-    if (document.department_id !== req.user.department_id) {
-      return res.status(403).json({ error: 'Access denied.' });
     }
     if (document.status === 'Processing') {
       return res.status(409).json({ error: 'Document is already being processed.' });
@@ -386,10 +523,7 @@ async function reindexDocument(req, res) {
     if (!mimetype) {
       return res.status(415).json({ error: 'This document type cannot be re-indexed.' });
     }
-    if (
-      !document.allowed_roles.length ||
-      !document.allowed_roles.every((role) => Object.values(Role).includes(role))
-    ) {
+    if (!document.allowed_roles.length) {
       return res.status(409).json({
         error: 'The document has no valid access roles and cannot be re-indexed.',
       });
@@ -410,7 +544,7 @@ async function reindexDocument(req, res) {
     const claimed = await prisma.document.updateMany({
       where: {
         id,
-        department_id: req.user.department_id,
+        ...documentAccessWhere(req),
         status: { not: 'Processing' },
       },
       data: {
@@ -425,14 +559,18 @@ async function reindexDocument(req, res) {
     }
 
     try {
-      await deleteDocumentVectors('ekip_documents', id);
-      await deleteDocumentVectors('ekip_visual_documents', id);
+      await deleteDocumentVectors('ekip_documents', id, req.user.org_id);
+      await deleteDocumentVectors('ekip_visual_documents', id, req.user.org_id);
 
       const form = new FORM_DATA();
       form.append('rbac', JSON.stringify({
-        ...rbacFromReq(req),
+        org_id: document.department.workspace.org_id,
+        workspace_id: document.department.workspace_id,
+        department_id: document.department_id,
+        role_id: req.user.role_id,
+        is_owner: req.user.is_owner,
         user_id: document.uploaded_by,
-        allowed_roles: document.allowed_roles,
+        allowed_role_ids: document.allowed_roles.map((role) => role.role_id),
       }));
       form.append('token', req.headers['x-ai-token'] || '');
       form.append('document_id', id);
@@ -486,10 +624,7 @@ async function reindexDocument(req, res) {
 async function listDocuments(req, res) {
   try {
     const savedDocuments = await prisma.document.findMany({
-      where: {
-        department_id: req.user.department_id,
-        allowed_roles: { has: req.user.role },
-      },
+      where: documentAccessWhere(req, { manageAccess: true }),
       select: {
         id: true,
         filename: true,
@@ -500,6 +635,7 @@ async function listDocuments(req, res) {
         chunk_count: true,
         storage_key: true,
         created_at: true,
+        allowed_roles: { select: { role_id: true } },
       },
       orderBy: { created_at: 'desc' },
       take: 100,
@@ -513,14 +649,7 @@ async function listDocuments(req, res) {
         const response = await axios.post(
           `${QDRANT_URL}/collections/ekip_documents/points/scroll`,
           {
-            filter: {
-              must: [
-                { key: 'org_id', match: { value: req.user.org_id } },
-                { key: 'workspace_id', match: { value: req.user.workspace_id } },
-                { key: 'department_id', match: { value: req.user.department_id } },
-                { key: 'allowed_roles', match: { value: req.user.role } },
-              ],
-            },
+            filter: qdrantAccessFilter(req, { manageAccess: true }),
             limit: 5000,
             offset,
             with_payload: ['document_id', 'filename', 'file_type'],
@@ -555,8 +684,9 @@ async function listDocuments(req, res) {
       );
       res.json({
         documents: [
-          ...savedDocuments.map(({ storage_key: storageKey, ...document }) => ({
+          ...savedDocuments.map(({ storage_key: storageKey, allowed_roles: allowedRoles, ...document }) => ({
             ...document,
+            allowed_role_ids: allowedRoles.map((role) => role.role_id),
             preview_available: Boolean(storageKey && document.file_type === 'pdf'),
           })),
           ...legacyDocuments.map((document) => ({ ...document, preview_available: false })),
@@ -565,8 +695,9 @@ async function listDocuments(req, res) {
     } catch (err) {
       console.error('[ai] indexed document history unavailable:', err.message);
       res.json({
-        documents: savedDocuments.map(({ storage_key: storageKey, ...document }) => ({
+        documents: savedDocuments.map(({ storage_key: storageKey, allowed_roles: allowedRoles, ...document }) => ({
           ...document,
+          allowed_role_ids: allowedRoles.map((role) => role.role_id),
           preview_available: Boolean(storageKey && document.file_type === 'pdf'),
         })),
         warning: 'Previously indexed documents could not be loaded from the AI index',
@@ -583,8 +714,7 @@ async function previewDocument(req, res) {
     const document = await prisma.document.findFirst({
       where: {
         id: req.params.id,
-        department_id: req.user.department_id,
-        allowed_roles: { has: req.user.role },
+        ...documentAccessWhere(req),
         file_type: 'pdf',
         storage_key: { not: null },
       },
@@ -643,8 +773,7 @@ async function getDocumentPageImage(req, res) {
     const document = await prisma.document.findFirst({
       where: {
         id,
-        department_id: req.user.department_id,
-        allowed_roles: { has: req.user.role },
+        ...documentAccessWhere(req),
       },
       select: { id: true },
     });
@@ -694,8 +823,7 @@ async function deleteDocument(req, res) {
     document = await prisma.document.findFirst({
       where: {
         id,
-        department_id: req.user.department_id,
-        allowed_roles: { has: req.user.role },
+        ...documentAccessWhere(req),
       },
     });
 
@@ -706,10 +834,7 @@ async function deleteDocument(req, res) {
     const filter = {
       must: [
         { key: 'document_id', match: { value: id } },
-        { key: 'org_id', match: { value: req.user.org_id } },
-        { key: 'workspace_id', match: { value: req.user.workspace_id } },
-        { key: 'department_id', match: { value: req.user.department_id } },
-        { key: 'allowed_roles', match: { value: req.user.role } },
+        ...qdrantAccessFilter(req).must,
       ],
     };
 
@@ -770,10 +895,7 @@ async function updateDocumentProgress(req, res) {
     const result = await prisma.document.updateMany({
       where: {
         id,
-        department_id: req.user.department_id,
-        ...(req.user.role === 'Admin' || req.user.role === 'Manager'
-          ? {}
-          : { allowed_roles: { has: req.user.role } }),
+        ...documentAccessWhere(req),
         status: 'Processing',
       },
       data: { stage, progress, ...(chunkCount === undefined ? {} : { chunk_count: chunkCount }) },
@@ -796,11 +918,13 @@ module.exports = {
   getAskProgress,
   listAnswerHistory,
   clearAnswerHistory,
-  ingest,ingestDocument,
+  ingest,  ingestDocument,
+  validateAllowedRoleIds,
   reindexDocument,
   listDocuments,
   previewDocument,
   getDocumentPageImage,
   updateDocumentProgress,
   deleteDocument,
+  updateDocumentAccess,
 };

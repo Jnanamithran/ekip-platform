@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
-import { navForRole } from "../lib/nav";
+import { navForUser } from "../lib/nav";
 import Avatar from "../components/ui/Avatar";
 import { RoleBadge } from "../components/ui/Badge";
 
@@ -13,7 +13,7 @@ export default function DashboardLayout() {
   // primary guard, so it never calls navigate() during render.
   if (!user) return null;
 
-  const items = navForRole(user.role);
+  const items = navForUser(user);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-paper">

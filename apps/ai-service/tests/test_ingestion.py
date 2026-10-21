@@ -30,9 +30,9 @@ def test_pdf_extracts_pages():
 
 def test_scanned_pdf_flagged(tmp_path):
     """A PDF with no text content should be flagged."""
-    import fitz
+    import pymupdf
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     doc.new_page()  # blank page — no text
     pdf_path = str(tmp_path / "blank.pdf")
     doc.save(pdf_path)

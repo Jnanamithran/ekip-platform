@@ -2,7 +2,11 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const aiController = require('../controllers/ai.controller');
-const { authenticate, requireRole } = require('../middleware/auth.middleware');
+const {
+  authenticate,
+  requirePermission,
+  requireAnyPermission,
+} = require('../middleware/auth.middleware');
 const { queryLimiter, uploadLimiter } = require('../middleware/rateLimiter');
 
 const upload = multer({
@@ -17,34 +21,68 @@ router.use(authenticate, (req, res, next) => {
 });
 
 // Query the knowledge base (retrieval + generation + citations)
-router.post('/ask', queryLimiter,aiController.ask);
-router.post('/ask/progress', aiController.updateAskProgress);
-router.get('/ask/progress/:requestId', aiController.getAskProgress);
-router.get('/history', aiController.listAnswerHistory);
-router.delete('/history', aiController.clearAnswerHistory);
+router.post('/ask', requirePermission('documents:search'), queryLimiter, aiController.ask);
+router.post('/ask/progress', requirePermission('documents:search'), aiController.updateAskProgress);
+router.get('/ask/progress/:requestId', requirePermission('documents:search'), aiController.getAskProgress);
+router.get('/history', requirePermission('documents:search'), aiController.listAnswerHistory);
+router.delete('/history', requirePermission('documents:search'), aiController.clearAnswerHistory);
 
 // Upload and process a document (ingestion pipeline)
-router.post('/ingest',uploadLimiter, upload.single('file'), aiController.ingest);
+router.post(
+  '/ingest',
+  requirePermission('documents:upload'),
+  uploadLimiter,
+  upload.single('file'),
+  aiController.ingest
+);
 router.post(
   '/documents/:id/reindex',
   uploadLimiter,
-  requireRole('Admin', 'Manager'),
+  requirePermission('documents:reindex'),
   aiController.reindexDocument
 );
-router.post('/documents/:id/progress', aiController.updateDocumentProgress);
-router.get('/documents/:id/preview', aiController.previewDocument);
+router.post(
+  '/documents/:id/progress',
+  requireAnyPermission('documents:upload', 'drive:import', 'documents:reindex'),
+  aiController.updateDocumentProgress
+);
+router.get(
+  '/documents/:id/preview',
+  requirePermission('documents:search'),
+  aiController.previewDocument
+);
+router.patch(
+  '/documents/:id/access',
+  requirePermission('documents:manage_access'),
+  aiController.updateDocumentAccess
+);
 
 // Rendered page image for a visual citation preview (scanned PDFs, page is 1-based)
 router.get(
   '/documents/:id/page-image/:page_num',
+  requirePermission('documents:search'),
   aiController.getDocumentPageImage
 );
 
 // List documents available to the authenticated user
-router.get('/documents', aiController.listDocuments);
+router.get(
+  '/documents',
+  requireAnyPermission(
+    'documents:search',
+    'documents:upload',
+    'documents:delete',
+    'documents:reindex',
+    'documents:manage_access'
+  ),
+  aiController.listDocuments
+);
 
 // Delete an authorized document and all of its indexed chunks
-router.delete('/documents/:id', aiController.deleteDocument);
+router.delete(
+  '/documents/:id',
+  requirePermission('documents:delete'),
+  aiController.deleteDocument
+);
 
 // Health check
 router.get('/health', aiController.health);

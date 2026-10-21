@@ -28,7 +28,7 @@ export default function Signup() {
             // Account exists now, but we still need a real token — log in
             // right after signing up so the user lands straight in the app.
             await login(email, password);
-            navigate("/app/search");
+            navigate("/app");
         } catch (err) {
             setError(err.message);
         } finally {
@@ -42,7 +42,7 @@ export default function Signup() {
                 <div className="mb-6 text-center">
                     <h1 className="font-display text-2xl text-ink">Create your organization</h1>
                     <p className="mt-1 text-sm text-slate">
-                        This sets you up as the Admin.
+                        You will be the organization Owner. This role is permanent and cannot be reassigned.
                     </p>
                 </div>
 

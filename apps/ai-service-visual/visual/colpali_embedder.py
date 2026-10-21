@@ -24,7 +24,7 @@ import uuid
 import torch
 from pathlib import Path
 from PIL import Image
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 
 from colpali_engine.models import ColPali, ColPaliProcessor
 from qdrant_client import QdrantClient
@@ -87,7 +87,7 @@ def ensure_visual_collection() -> None:
             ("org_id",        PayloadSchemaType.KEYWORD),
             ("workspace_id",  PayloadSchemaType.KEYWORD),
             ("department_id", PayloadSchemaType.KEYWORD),
-            ("allowed_roles", PayloadSchemaType.KEYWORD),
+            ("allowed_role_ids", PayloadSchemaType.KEYWORD),
             ("document_id",   PayloadSchemaType.KEYWORD),
         ]:
             client.create_payload_index(
@@ -102,7 +102,7 @@ def ensure_visual_collection() -> None:
 
 def render_page(pdf_path: str, page_num: int) -> Image.Image:
     """Render one PDF page (1-based) as a PIL RGB image."""
-    doc  = fitz.open(pdf_path)
+    doc  = pymupdf.open(pdf_path)
     page = doc[page_num - 1]
     pix  = page.get_pixmap(dpi=RENDER_DPI)
     return Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -136,7 +136,7 @@ def embed_and_upsert_visual(
     pdf_path:    str,
     document_id: str,
     filename:    str,
-    rbac:        dict,   # keys: org_id, workspace_id, department_id, allowed_roles, uploaded_by
+    rbac:        dict,   # keys: org_id, workspace_id, department_id, allowed_role_ids, uploaded_by
     total_pages: int,
 ) -> int:
     """
@@ -175,7 +175,7 @@ def embed_and_upsert_visual(
                 "org_id":        rbac["org_id"],
                 "workspace_id":  rbac["workspace_id"],
                 "department_id": rbac["department_id"],
-                "allowed_roles": rbac["allowed_roles"],
+                "allowed_role_ids": rbac["allowed_role_ids"],
                 "uploaded_by":   rbac["uploaded_by"],
             },
         ))
@@ -187,7 +187,7 @@ def embed_and_upsert_visual(
 
 def search_visual(
     query:   str,
-    rbac:    dict,   # keys: org_id, workspace_id, department_id, role
+    rbac:    dict,   # keys: org_id, workspace_id, department_id, role_id, is_owner
     top_k:   int = 4,
 ) -> list[dict]:
     """
@@ -200,12 +200,17 @@ def search_visual(
     client       = get_qdrant()
     query_vector = embed_query(query)
 
-    rbac_filter = Filter(must=[
-        FieldCondition(key="org_id",        match=MatchValue(value=rbac["org_id"])),
-        FieldCondition(key="workspace_id",  match=MatchValue(value=rbac["workspace_id"])),
-        FieldCondition(key="department_id", match=MatchValue(value=rbac["department_id"])),
-        FieldCondition(key="allowed_roles", match=MatchValue(value=rbac["role"])),
-    ])
+    conditions = [
+        FieldCondition(key="org_id", match=MatchValue(value=rbac["org_id"])),
+    ]
+    if not rbac["is_owner"]:
+        conditions.extend([
+            FieldCondition(
+                key="allowed_role_ids",
+                match=MatchValue(value=rbac["role_id"]),
+            ),
+        ])
+    rbac_filter = Filter(must=conditions)
 
     hits = client.search(
         collection_name = VISUAL_COLLECTION,

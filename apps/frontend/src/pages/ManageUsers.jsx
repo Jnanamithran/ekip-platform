@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  createAdminUser,
+  getOrganizationRoles,
   getAdminUsers,
   getDepartments,
   updateAdminUser,
@@ -9,8 +11,7 @@ import {
 import Card from "../components/ui/Card";
 import Badge, { RoleBadge } from "../components/ui/Badge";
 import Avatar from "../components/ui/Avatar";
-
-const ROLES = ["Admin", "Manager", "Employee", "Intern"];
+import { useAuth } from "../lib/AuthContext";
 
 const linkBtn =
   "text-xs font-medium text-index hover:underline disabled:opacity-50";
@@ -18,14 +19,22 @@ const fieldCls =
   "rounded-md border border-hairline bg-white px-2 py-1.5 text-sm text-ink";
 
 export default function ManageUsers() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ email: "", role: "", department_id: "" });
+  const [form, setForm] = useState({ email: "", role_id: "", department_id: "" });
+  const [newUser, setNewUser] = useState({
+    email: "",
+    password: "",
+    role_id: "",
+    department_id: "",
+  });
   const [tempPw, setTempPw] = useState(null); // { email, password }
   const [copied, setCopied] = useState(false);
 
@@ -33,23 +42,41 @@ export default function ManageUsers() {
     (id) => departments.find((d) => d.id === id)?.name ?? id,
     [departments]
   );
+  const assignableRoles = roles.filter(
+    (role) =>
+      !role.is_owner &&
+      (currentUser?.is_owner ||
+        role.permissions.every((permission) => currentUser?.permissions?.includes(permission)))
+  );
 
   const load = useCallback(async () => {
     try {
-      const data = await getAdminUsers();
-      setUsers(data.users ?? []);
+      const [usersData, rolesData] = await Promise.all([
+        getAdminUsers(),
+        getOrganizationRoles(),
+      ]);
+      setUsers(usersData.users ?? []);
+      setRoles(rolesData.roles ?? []);
+      setNewUser((current) => ({
+        ...current,
+        role_id: current.role_id || rolesData.roles.find((role) =>
+          !role.is_owner &&
+          (currentUser?.is_owner ||
+            role.permissions.every((permission) => currentUser?.permissions?.includes(permission)))
+        )?.id || "",
+      }));
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     load();
     getDepartments()
       .then((d) => setDepartments(d.departments ?? (Array.isArray(d) ? d : [])))
-      .catch(() => { }); // fall back to showing department ids
+      .catch((err) => setError(err.message));
   }, [load]);
 
   // Runs an action for one user, with shared busy/error handling
@@ -70,7 +97,7 @@ export default function ManageUsers() {
     setEditingId(user.id);
     setForm({
       email: user.email,
-      role: user.role,
+      role_id: user.role_id,
       department_id: user.department_id ?? "",
     });
   }
@@ -79,10 +106,11 @@ export default function ManageUsers() {
     // Only send fields that actually changed
     const body = {};
     if (form.email.trim().toLowerCase() !== user.email) body.email = form.email.trim();
-    if (form.role !== user.role) body.role = form.role;
+    if (form.role_id !== user.role_id) body.role_id = form.role_id;
     if (form.department_id && form.department_id !== user.department_id) {
       body.department_id = form.department_id;
     }
+
     if (!Object.keys(body).length) {
       setEditingId(null);
       return;
@@ -93,6 +121,28 @@ export default function ManageUsers() {
       setEditingId(null);
       setNotice("User updated.");
     });
+  }
+
+  async function createUser(event) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    setBusyId("new-user");
+    try {
+      const { user: created } = await createAdminUser(newUser);
+      setUsers((previous) => [created, ...previous]);
+      setNewUser({
+        email: "",
+        password: "",
+        role_id: assignableRoles[0]?.id || "",
+        department_id: "",
+      });
+      setNotice("User created.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
   }
 
   function toggleActive(user) {
@@ -141,7 +191,7 @@ export default function ManageUsers() {
       <div>
         <h1 className="font-display text-xl text-ink">Manage users</h1>
         <p className="text-sm text-slate">
-          Admin-only. Assign roles and manage workspace access.
+          Create organization-specific roles, assign them to users, and manage their accounts.
         </p>
       </div>
 
@@ -149,6 +199,62 @@ export default function ManageUsers() {
       {error && !loading && (
         <p className="text-sm text-danger">{error}</p>
       )}
+
+      <Card className="p-4">
+        <form onSubmit={createUser} className="grid gap-3 sm:grid-cols-2">
+          <h2 className="text-sm font-medium text-ink sm:col-span-2">Add a user</h2>
+          <input
+            required
+            type="email"
+            placeholder="Email address"
+            className={fieldCls}
+            value={newUser.email}
+            onChange={(event) => setNewUser({ ...newUser, email: event.target.value })}
+          />
+          <input
+            required
+            type="password"
+            placeholder="Temporary password"
+            className={fieldCls}
+            value={newUser.password}
+            onChange={(event) => setNewUser({ ...newUser, password: event.target.value })}
+          />
+          <select
+            required
+            className={fieldCls}
+            value={newUser.role_id}
+            onChange={(event) => setNewUser({ ...newUser, role_id: event.target.value })}
+          >
+            <option value="">Select a role</option>
+            {assignableRoles.map((role) => (
+              <option key={role.id} value={role.id}>{role.name}</option>
+            ))}
+          </select>
+          <select
+            required
+            className={fieldCls}
+            value={newUser.department_id}
+            onChange={(event) => setNewUser({ ...newUser, department_id: event.target.value })}
+          >
+            <option value="">Select a department</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>{department.name}</option>
+            ))}
+          </select>
+          <button
+            className={`${linkBtn} justify-self-start`}
+            type="submit"
+            disabled={busyId === "new-user" || !assignableRoles.length || !departments.length}
+          >
+            {busyId === "new-user" ? "Creating…" : "Create user"}
+          </button>
+          {!assignableRoles.length && (
+            <p className="text-xs text-slate sm:col-span-2">
+              Create a role with Manage Roles before adding users.
+            </p>
+          )}
+        </form>
+      </Card>
 
       <Card className="divide-y divide-hairline">
         {loading ? (
@@ -189,11 +295,12 @@ export default function ManageUsers() {
                     <div className="flex gap-2">
                       <select
                         className={fieldCls}
-                        value={form.role}
-                        onChange={(e) => setForm({ ...form, role: e.target.value })}
+                        value={form.role_id}
+                        disabled={user.id === currentUser?.user_id}
+                        onChange={(e) => setForm({ ...form, role_id: e.target.value })}
                       >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>{r}</option>
+                        {assignableRoles.map((role) => (
+                          <option key={role.id} value={role.id}>{role.name}</option>
                         ))}
                       </select>
                       <select
@@ -217,19 +324,19 @@ export default function ManageUsers() {
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <div className="flex gap-4 pl-10">
-                    <button className={linkBtn} disabled={busy} onClick={() => startEdit(user)}>
-                      Edit
-                    </button>
-                    <button className={linkBtn} disabled={busy} onClick={() => resetPw(user)}>
-                      Reset password
-                    </button>
-                    <button className={linkBtn} disabled={busy} onClick={() => toggleActive(user)}>
-                      {inactive ? "Reactivate" : "Deactivate"}
-                    </button>
-                  </div>
-                )}
+                ) : !user.role_is_owner && user.id !== currentUser?.user_id ? (
+                    <div className="flex gap-4 pl-10">
+                      <button className={linkBtn} disabled={busy} onClick={() => startEdit(user)}>
+                        Edit
+                      </button>
+                      <button className={linkBtn} disabled={busy} onClick={() => resetPw(user)}>
+                        Reset password
+                      </button>
+                      <button className={linkBtn} disabled={busy} onClick={() => toggleActive(user)}>
+                        {inactive ? "Reactivate" : "Deactivate"}
+                      </button>
+                    </div>
+                  ) : null}
               </div>
             );
           })

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for the OCR fallback applied to scanned / image-only PDFs.
 
 A PDF page whose extracted text is below SCANNED_DOC_CHAR_THRESHOLD is first
@@ -12,7 +12,7 @@ import sys
 import types
 from pathlib import Path
 
-import fitz
+import pymupdf
 import pytest
 
 SVC_DIR = Path(__file__).resolve().parents[1]
@@ -25,14 +25,14 @@ from ingestion.parsers.pdf_parser import parse_pdf  # noqa: E402
 OCR_TEXT = "Scanned document text extracted by OCR engine successfully"
 
 
-# ── fixtures / helpers ───────────────────────────────────────────────────────
+# â”€â”€ fixtures / helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @pytest.fixture
 def text_pdf(tmp_path):
     """A normal text-based PDF (no OCR should be needed)."""
     path = tmp_path / "text.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     page.insert_text((72, 100), "This is a normal text based PDF page with plenty of words.")
     doc.save(path)
@@ -44,11 +44,11 @@ def text_pdf(tmp_path):
 def image_only_pdf(tmp_path):
     """A page containing only an image and no text layer (simulates a scan)."""
     path = tmp_path / "image_only.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
-    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200))
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 200, 200))
     pix.set_rect(pix.irect, (255, 255, 255))
-    page.insert_image(fitz.Rect(50, 50, 300, 300), pixmap=pix)
+    page.insert_image(pymupdf.Rect(50, 50, 300, 300), pixmap=pix)
     doc.save(path)
     doc.close()
     return path
@@ -58,7 +58,7 @@ def image_only_pdf(tmp_path):
 def empty_pdf(tmp_path):
     """A PDF with a single blank page."""
     path = tmp_path / "empty.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     doc.new_page()
     doc.save(path)
     doc.close()
@@ -100,7 +100,7 @@ def stub_easyocr(monkeypatch):
 
 
 
-# ── normal text PDFs ─────────────────────────────────────────────────────────
+# â”€â”€ normal text PDFs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_text_pdf_keeps_extracted_text_without_calling_ocr(text_pdf, monkeypatch):
@@ -120,7 +120,7 @@ def test_text_pdf_keeps_extracted_text_without_calling_ocr(text_pdf, monkeypatch
     assert result.warning is None
 
 
-# ── OCR unavailable / failing ────────────────────────────────────────────────
+# â”€â”€ OCR unavailable / failing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_scanned_pdf_falls_back_when_ocr_unavailable(image_only_pdf, monkeypatch):
@@ -156,7 +156,7 @@ def test_ocr_failure_is_swallowed_and_does_not_raise(image_only_pdf, monkeypatch
 
 
 
-# ── OCR success ──────────────────────────────────────────────────────────────
+# â”€â”€ OCR success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_scanned_pdf_uses_ocr_text_when_available(image_only_pdf, stub_easyocr):
@@ -171,12 +171,12 @@ def test_scanned_pdf_uses_ocr_text_when_available(image_only_pdf, stub_easyocr):
 def test_ocr_reader_is_cached_and_reused_across_pages(tmp_path, stub_easyocr):
     """The reader must be built once, not once per page."""
     path = tmp_path / "multi.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     for _ in range(3):
         page = doc.new_page()
-        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 100, 100))
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100))
         pix.set_rect(pix.irect, (255, 255, 255))
-        page.insert_image(fitz.Rect(10, 10, 90, 90), pixmap=pix)
+        page.insert_image(pymupdf.Rect(10, 10, 90, 90), pixmap=pix)
     doc.save(path)
     doc.close()
 
@@ -189,13 +189,13 @@ def test_ocr_reader_is_cached_and_reused_across_pages(tmp_path, stub_easyocr):
 def test_ocr_only_runs_for_pages_below_threshold(tmp_path, monkeypatch):
     """Pages with a solid text layer are skipped; sparse pages are OCR'd."""
     path = tmp_path / "mixed.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     rich = doc.new_page()
     rich.insert_text((72, 100), "A page with a genuinely long text layer " * 5)
     sparse = doc.new_page()
-    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 100, 100))
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100))
     pix.set_rect(pix.irect, (255, 255, 255))
-    sparse.insert_image(fitz.Rect(10, 10, 90, 90), pixmap=pix)
+    sparse.insert_image(pymupdf.Rect(10, 10, 90, 90), pixmap=pix)
     doc.save(path)
     doc.close()
 
@@ -214,7 +214,7 @@ def test_ocr_only_runs_for_pages_below_threshold(tmp_path, monkeypatch):
     assert result.pages[1].text.startswith("OCR TEXT")
 
 
-# ── edge cases ───────────────────────────────────────────────────────────────
+# â”€â”€ edge cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_empty_pdf_is_flagged_and_does_not_crash(empty_pdf):
@@ -228,20 +228,20 @@ def test_empty_pdf_is_flagged_and_does_not_crash(empty_pdf):
 
 
 def test_pixmap_conversion_handles_rgb_rgba_and_grayscale():
-    rgb = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10))
+    rgb = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10))
     assert pdf_parser._pixmap_to_rgb_array(rgb).shape == (10, 10, 3)
 
-    rgba = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10), True)
+    rgba = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), True)
     assert rgba.n == 4
     assert pdf_parser._pixmap_to_rgb_array(rgba).shape == (10, 10, 3)
 
-    gray = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 10, 10))
+    gray = pymupdf.Pixmap(pymupdf.csGRAY, pymupdf.IRect(0, 0, 10, 10))
     assert pdf_parser._pixmap_to_rgb_array(gray).shape == (10, 10, 3)
 
 
 def test_try_ocr_page_can_reuse_an_open_document(image_only_pdf):
     """When an open doc is supplied the file must not be re-opened."""
-    with fitz.open(str(image_only_pdf)) as doc:
+    with pymupdf.open(str(image_only_pdf)) as doc:
         assert pdf_parser._render_page_to_rgb(doc, 1).shape[2] == 3
         assert pdf_parser._render_page_to_rgb(doc, 1).ndim == 3
 

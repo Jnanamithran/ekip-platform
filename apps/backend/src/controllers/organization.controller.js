@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
 const { validatePassword } = require('../utils/passwordPolicy');
+const { OWNER_PERMISSIONS } = require('../utils/permissions');
 
 const prisma = new PrismaClient();
 
@@ -8,8 +9,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const isText = (v) => typeof v === 'string' && v.trim().length > 0;
 
 // POST /organizations  (public: onboarding of a new organization)
-// Creates the organization, a default workspace and department,
-// and the first Admin user, all in one request.
+// Creates the organization, its first workspace and department, and its
+// immutable Owner in one transaction.
 async function createOrganization(req, res) {
   try {
     const {
@@ -36,46 +37,55 @@ async function createOrganization(req, res) {
     const password_hash = await bcrypt.hash(admin_password, 10);
 
     // One nested create: either everything is saved or nothing is
-    const org = await prisma.organization.create({
-      data: {
-        name: organization_name.trim(),
-        workspaces: {
-          create: {
-            name: isText(workspace_name) ? workspace_name.trim() : 'Main Workspace',
-            departments: {
-              create: {
-                name: isText(department_name) ? department_name.trim() : 'General',
-                users: {
-                  create: {
-                    email: admin_email.trim().toLowerCase(),
-                    password_hash,
-                    role: 'Admin',
-                  },
+    const organization = await prisma.$transaction(async (tx) => {
+      const org = await tx.organization.create({
+        data: {
+          name: organization_name.trim(),
+          workspaces: {
+            create: {
+              name: isText(workspace_name) ? workspace_name.trim() : 'Main Workspace',
+              departments: {
+                create: {
+                  name: isText(department_name) ? department_name.trim() : 'General',
                 },
               },
             },
           },
         },
-      },
-      include: {
-        workspaces: {
-          include: {
-            departments: {
-              include: { users: { select: { id: true, email: true, role: true } } },
-            },
-          },
+        include: { workspaces: { include: { departments: true } } },
+      });
+
+      const workspace = org.workspaces[0];
+      const department = workspace.departments[0];
+      const ownerRole = await tx.organizationRole.create({
+        data: {
+          org_id: org.id,
+          name: 'Owner',
+          permissions: OWNER_PERMISSIONS,
+          is_owner: true,
         },
-      },
+      });
+      const owner = await tx.user.create({
+        data: {
+          email: admin_email.trim().toLowerCase(),
+          password_hash,
+          role_id: ownerRole.id,
+          department_id: department.id,
+        },
+        select: { id: true, email: true, role_id: true },
+      });
+      await tx.organization.update({
+        where: { id: org.id },
+        data: { owner_user_id: owner.id },
+      });
+      return { org, workspace, department, owner };
     });
 
-    const workspace = org.workspaces[0];
-    const department = workspace.departments[0];
-
     res.status(201).json({
-      organization: { id: org.id, name: org.name },
-      workspace: { id: workspace.id, name: workspace.name },
-      department: { id: department.id, name: department.name },
-      admin: department.users[0],
+      organization: { id: organization.org.id, name: organization.org.name },
+      workspace: { id: organization.workspace.id, name: organization.workspace.name },
+      department: { id: organization.department.id, name: organization.department.name },
+      owner: { id: organization.owner.id, email: organization.owner.email, role: 'Owner' },
     });
   } catch (err) {
     // P2002 = unique constraint failed (email already exists)

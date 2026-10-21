@@ -36,8 +36,7 @@ class RBACInfo(BaseModel):
     org_id:        str
     workspace_id:  str
     department_id: str
-    role:          str
-    allowed_roles: list[str]
+    allowed_role_ids: list[str]
     uploaded_by:   str
 
 
@@ -46,7 +45,8 @@ class VisualSearchRequest(BaseModel):
     org_id:      str
     workspace_id: str
     department_id: str
-    role:        str
+    role_id:     str
+    is_owner:    bool = False
     top_k:       int = 4
 
 
@@ -76,7 +76,8 @@ class VisualQARequest(BaseModel):
     org_id:       str
     workspace_id: str
     department_id: str
-    role:         str
+    role_id:      str
+    is_owner:     bool = False
     top_k:        int = 4
 
 
@@ -135,8 +136,8 @@ async def ingest(
         tmp_path.write_bytes(await file.read())
 
         # Count pages using PyMuPDF (already a dependency via colpali_embedder)
-        import fitz
-        doc         = fitz.open(str(tmp_path))
+        import pymupdf
+        doc         = pymupdf.open(str(tmp_path))
         total_pages = len(doc)
         doc.close()
 
@@ -150,7 +151,7 @@ async def ingest(
             "org_id":        rbac_info.org_id,
             "workspace_id":  rbac_info.workspace_id,
             "department_id": rbac_info.department_id,
-            "allowed_roles": rbac_info.allowed_roles,
+            "allowed_role_ids": rbac_info.allowed_role_ids,
             "uploaded_by":   rbac_info.uploaded_by,
         }
 
@@ -190,7 +191,8 @@ def search(req: VisualSearchRequest):
             "org_id":        req.org_id,
             "workspace_id":  req.workspace_id,
             "department_id": req.department_id,
-            "role":          req.role,
+            "role_id":       req.role_id,
+            "is_owner":      req.is_owner,
         }
 
         raw_results = search_visual(
@@ -230,7 +232,8 @@ async def ask_visual(req: VisualQARequest):
             "org_id":        req.org_id,
             "workspace_id":  req.workspace_id,
             "department_id": req.department_id,
-            "role":          req.role,
+            "role_id":       req.role_id,
+            "is_owner":      req.is_owner,
         }
 
         # Step 1: ColPali retrieval — RBAC applied BEFORE retrieval

@@ -1,35 +1,51 @@
-// Single source of truth for which roles see which nav items.
-// Keeping this in one file (instead of scattered role checks in
-// components) means RBAC UI logic is auditable at a glance —
-// useful when Jnani asks "who can see what" in review.
 export const NAV_ITEMS = [
   {
     label: "Search",
     path: "/app/search",
-    roles: ["Admin", "Manager", "Employee", "Intern"],
+    permissions: ["documents:search"],
   },
   {
-    label: "Upload Documents",
+    label: "Documents",
     path: "/app/upload",
-    roles: ["Admin", "Manager", "Employee"],
+    permissions: ["documents:upload", "documents:delete", "documents:reindex", "documents:manage_access"],
   },
   {
     label: "Manage Users",
     path: "/app/users",
-    roles: ["Admin"],
+    permissions: ["users:manage"],
+  },
+  {
+    label: "Manage Roles",
+    path: "/app/roles",
+    permissions: ["roles:manage"],
   },
   {
     label: "Integrations",
     path: "/app/integrations",
-    roles: ["Admin", "Manager"],
+    permissions: ["drive:connect", "drive:import"],
   },
   {
     label: "Workspace Settings",
     path: "/app/settings",
-    roles: ["Admin"],
+    permissions: ["workspace:manage"],
+  },
+  {
+    label: "Analytics",
+    path: "/app/analytics",
+    permissions: ["analytics:view"],
+  },
+  {
+    label: "Account",
+    path: "/app/account",
+    permissions: [],
   },
 ];
 
-export function navForRole(role) {
-  return NAV_ITEMS.filter((item) => item.roles.includes(role));
+export function navForUser(user) {
+  return NAV_ITEMS.filter(
+    (item) =>
+      !item.permissions.length ||
+      user?.is_owner ||
+      item.permissions.some((permission) => user?.permissions?.includes(permission))
+  );
 }

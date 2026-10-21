@@ -53,7 +53,8 @@ def test_ingest_reads_uploaded_pdf_bytes(monkeypatch):
         data={
             'rbac': (
                 '{"org_id":"org-1","workspace_id":"workspace-1",'
-                '"department_id":"department-1","role":"Admin"}'
+                '"department_id":"department-1","role_id":"role-admin",'
+                '"allowed_role_ids":["role-admin"]}'
             ),
             'document_id': '8c91ea18-102d-4d4a-ad80-f2c71af8d84c',
             'token': 'test-token',

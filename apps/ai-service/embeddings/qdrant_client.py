@@ -17,6 +17,8 @@ from .embedder import VECTOR_SIZE
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "ekip_documents"
+QDRANT_TIMEOUT = float(os.getenv("QDRANT_TIMEOUT", "5.0"))
+QDRANT_MAX_RETRIES = int(os.getenv("QDRANT_MAX_RETRIES", "2"))
 
 _client: QdrantClient | None = None
 
@@ -24,8 +26,30 @@ _client: QdrantClient | None = None
 def get_client() -> QdrantClient:
     global _client
     if _client is None:
-        _client = QdrantClient(url=QDRANT_URL)
+        _client = QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT)
     return _client
+
+
+def _retry_qdrant(operation: str, fn, *args, **kwargs):
+    """Run a Qdrant client method with bounded retry on transient failures.
+
+    Qdrant operations run on every search (Step 5/6) and ingest (Step 3).
+    A single connection blip should not 502 the request when the cluster
+    is healthy on retry — this keeps the UX resilient under load.
+    """
+    last_exc: Exception | None = None
+    attempts = QDRANT_MAX_RETRIES + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — transient network/HTTP errors
+            last_exc = exc
+            if attempt < attempts:
+                import time
+                time.sleep(0.2 * attempt)
+                continue
+            raise
+    raise last_exc  # pragma: no cover — loop always raises or returns
 
 
 def ensure_collection() -> None:
@@ -48,7 +72,7 @@ def ensure_collection() -> None:
             ("org_id", PayloadSchemaType.KEYWORD),
             ("workspace_id", PayloadSchemaType.KEYWORD),
             ("department_id", PayloadSchemaType.KEYWORD),
-            ("allowed_roles", PayloadSchemaType.KEYWORD),
+            ("allowed_role_ids", PayloadSchemaType.KEYWORD),
             ("document_id", PayloadSchemaType.KEYWORD),
         ]:
             client.create_payload_index(

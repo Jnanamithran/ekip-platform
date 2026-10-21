@@ -26,6 +26,40 @@ const payload = {
   department_id: 'dept-1',
   role: 'Manager',
 };
+// Mock user shape returned by the new authenticated middleware. Role and
+// permissions come from the organization role record (read from the DB), and
+// org_id is derived through the department -> workspace -> organization chain.
+const ROLE_MANAGER = {
+  id: 'role-manager',
+  name: 'Manager',
+  permissions: ['documents:search', 'documents:upload', 'documents:delete'],
+  is_owner: false,
+};
+const ROLE_INTERN = {
+  id: 'role-intern',
+  name: 'Intern',
+  permissions: ['documents:search'],
+  is_owner: false,
+};
+
+function makeUser({ role = ROLE_MANAGER, isOwner = false } = {}) {
+  return {
+    id: 'user-1',
+    email: 'a@test.com',
+    active: true,
+    role_id: role.id,
+    department_id: 'dept-1',
+    role,
+    department: {
+      name: 'Engineering',
+      workspace_id: 'ws-1',
+      workspace: {
+        org_id: 'org-1',
+        organization: { owner_user_id: isOwner ? 'user-1' : 'user-99' },
+      },
+    },
+  };
+}
 const sign = (data, options) => jwt.sign(data, process.env.JWT_SECRET, options);
 
 beforeEach(() => {
@@ -34,17 +68,7 @@ beforeEach(() => {
 
 describe('Auth middleware', () => {
   test('valid token -> 200 on /auth/me', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({
-      id: 'user-1',
-      email: 'a@test.com',
-      role: 'Manager',
-      department_id: 'dept-1',
-      department: {
-        name: 'Engineering',
-        workspace_id: 'ws-1',
-        workspace: { org_id: 'org-1' },
-      },
-    });
+    mockPrisma.user.findUnique.mockResolvedValue(makeUser());
     const res = await request(app)
       .get('/auth/me')
       .set('Authorization', `Bearer ${sign(payload)}`);
@@ -73,6 +97,7 @@ describe('Auth middleware', () => {
   });
 
   test('Intern -> 403 on admin route', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(makeUser({ role: ROLE_INTERN }));
     const res = await request(app)
       .get('/admin/users')
       .set('Authorization', `Bearer ${sign({ ...payload, role: 'Intern' })}`);
@@ -80,6 +105,7 @@ describe('Auth middleware', () => {
   });
 
   test('Manager -> 403 on admin route', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(makeUser());
     const res = await request(app)
       .get('/admin/users')
       .set('Authorization', `Bearer ${sign(payload)}`);

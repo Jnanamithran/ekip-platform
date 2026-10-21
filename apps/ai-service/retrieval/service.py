@@ -48,14 +48,17 @@ def _dense_search(
     """
     query_vector = embed_texts([query])[0]
 
-    qdrant_filter = Filter(
-        must=[
-            FieldCondition(key="org_id",        match=MatchValue(value=rbac.org_id)),
-            FieldCondition(key="workspace_id",  match=MatchValue(value=rbac.workspace_id)),
-            FieldCondition(key="department_id", match=MatchValue(value=rbac.department_id)),
-            FieldCondition(key="allowed_roles", match=MatchAny(any=rbac.allowed_roles)),
-        ]
-    )
+    conditions = [
+        FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
+    ]
+    if not rbac.is_owner:
+        conditions.extend([
+            FieldCondition(
+                key="allowed_role_ids",
+                match=MatchAny(any=rbac.allowed_role_ids),
+            ),
+        ])
+    qdrant_filter = Filter(must=conditions)
 
     client = get_client()
     hits = client.search(

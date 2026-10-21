@@ -1,5 +1,9 @@
 const express = require('express');
-const { authenticate, requireRole } = require('../middleware/auth.middleware');
+const {
+  authenticate,
+  requirePermission,
+  requireAnyPermission,
+} = require('../middleware/auth.middleware');
 const {
   createUser,
   listUsers,
@@ -18,22 +22,25 @@ const {
 
 const router = express.Router();
 
-// Every route in this file needs a valid token AND the Admin role.
-router.use(authenticate, requireRole('Admin'));
-router.get('/analytics/queries', queryAnalytics);
-router.post('/users', createUser);
-router.get('/users', listUsers);
-router.patch('/users/:id', updateUser);
-router.post('/users/:id/reset-password', resetPassword);
-router.patch('/users/:id/deactivate', deactivateUser);
-router.patch('/users/:id/reactivate', reactivateUser);
+router.use(authenticate);
+router.get('/analytics/queries', requirePermission('analytics:view'), queryAnalytics);
+router.post('/users', requirePermission('users:manage'), createUser);
+router.get('/users', requirePermission('users:manage'), listUsers);
+router.patch('/users/:id', requirePermission('users:manage'), updateUser);
+router.post('/users/:id/reset-password', requirePermission('users:manage'), resetPassword);
+router.patch('/users/:id/deactivate', requirePermission('users:manage'), deactivateUser);
+router.patch('/users/:id/reactivate', requirePermission('users:manage'), reactivateUser);
 
-router.post('/workspaces', createWorkspace);
-router.get('/workspaces', listWorkspaces);
-router.get('/workspaces/:workspaceId', getWorkspaceDashboard);
-router.patch('/workspaces/:workspaceId', updateWorkspace);
+router.post('/workspaces', requirePermission('workspace:manage'), createWorkspace);
+router.get('/workspaces', requirePermission('workspace:manage'), listWorkspaces);
+router.get('/workspaces/:workspaceId', requirePermission('workspace:manage'), getWorkspaceDashboard);
+router.patch('/workspaces/:workspaceId', requirePermission('workspace:manage'), updateWorkspace);
 
-router.post('/departments', createDepartment);
-router.get('/departments', listDepartments);
+router.post('/departments', requirePermission('workspace:manage'), createDepartment);
+router.get(
+  '/departments',
+  requireAnyPermission('workspace:manage', 'users:manage'),
+  listDepartments
+);
 
 module.exports = router;

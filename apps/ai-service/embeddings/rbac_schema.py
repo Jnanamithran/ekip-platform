@@ -19,7 +19,7 @@ class RBACMetadata(BaseModel):
     org_id: str
     workspace_id: str
     department_id: str
-    allowed_roles: List[str]   # e.g. ["Admin", "Manager"] — roles permitted to retrieve this chunk
+    allowed_role_ids: List[str]
     uploaded_by: str           # user_id of uploader, for audit trail
 
     def as_payload(self) -> dict:
@@ -27,6 +27,6 @@ class RBACMetadata(BaseModel):
             "org_id": self.org_id,
             "workspace_id": self.workspace_id,
             "department_id": self.department_id,
-            "allowed_roles": self.allowed_roles,
+            "allowed_role_ids": self.allowed_role_ids,
             "uploaded_by": self.uploaded_by,
         }

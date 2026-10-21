@@ -132,6 +132,18 @@ export async function getMe() {
     return data.user;
 }
 
+export async function changePassword(currentPassword, newPassword) {
+    const data = await apiFetch('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+            current_password: currentPassword,
+            new_password: newPassword,
+        }),
+    });
+    setTokens(data);
+    return data;
+}
+
 // Called once on app load if a refresh token already exists in
 // localStorage -- rebuilds the in-memory access token, then fetches
 // who the user is, so a page reload doesn't force a re-login.
@@ -269,9 +281,12 @@ function sendDocumentUpload(formData, token, onProgress) {
     });
 }
 
-export async function uploadDocument(file, onProgress = () => { }) {
+export async function uploadDocument(file, onProgress = () => { }, allowedRoleIds) {
     const formData = new FormData();
     formData.append('file', file);
+    if (allowedRoleIds) {
+        formData.append('allowed_role_ids', JSON.stringify(allowedRoleIds));
+    }
 
     try {
         return await sendDocumentUpload(formData, accessToken, onProgress);
@@ -295,6 +310,13 @@ export async function deleteDocument(id) {
 export async function reindexDocument(id) {
     return apiFetch('/ai/documents/' + encodeURIComponent(id) + '/reindex', {
         method: 'POST',
+    });
+}
+
+export async function updateDocumentAccess(id, allowedRoleIds) {
+    return apiFetch('/ai/documents/' + encodeURIComponent(id) + '/access', {
+        method: 'PATCH',
+        body: JSON.stringify({ allowed_role_ids: allowedRoleIds }),
     });
 }
 // ---------------------------------------------------------------------------
@@ -339,6 +361,42 @@ export async function getDepartments() {
     return apiFetch('/admin/departments');
 }
 
+export async function createDepartment(payload) {
+    return apiFetch('/admin/departments', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function createAdminUser(payload) {
+    return apiFetch('/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function getOrganizationRoles() {
+    return apiFetch('/roles');
+}
+
+export async function createOrganizationRole(payload) {
+    return apiFetch('/roles', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function updateOrganizationRole(id, payload) {
+    return apiFetch('/roles/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function deleteOrganizationRole(id) {
+    return apiFetch('/roles/' + encodeURIComponent(id), { method: 'DELETE' });
+}
+
 // ---------------------------------------------------------------------------
 // Google Drive integration
 // ---------------------------------------------------------------------------
@@ -357,15 +415,25 @@ export async function getDriveConnectUrl() {
  * Lists ingestible Drive files (PDF/DOCX/XLSX/TXT, not trashed).
  * Response: { files: [{ id, name, mimeType, modifiedTime, size }], next_page_token }
  */
-export async function getDriveFiles(pageToken) {
-    const qs = pageToken ? '?page_token=' + encodeURIComponent(pageToken) : '';
-    return apiFetch('/integrations/google/files' + qs);
+export async function getDriveFiles(parentId, pageToken) {
+    const params = new URLSearchParams();
+    if (parentId) params.set('parent_id', parentId);
+    if (pageToken) params.set('page_token', pageToken);
+    const qs = params.toString();
+    return apiFetch('/integrations/google/files' + (qs ? '?' + qs : ''));
+}
+
+export async function getDriveFolders(parentId, pageToken) {
+    const params = new URLSearchParams();
+    if (parentId) params.set('parent_id', parentId);
+    if (pageToken) params.set('page_token', pageToken);
+    const qs = params.toString();
+    return apiFetch('/integrations/google/folders' + (qs ? '?' + qs : ''));
 }
 
 /**
- * Import Drive files with per-file RBAC.
- * Body: { files: [{ file_id, allowed_roles: [...] }] } (1-5 files per call;
- * backend requires allowed_roles to be non-empty and include your own role).
+ * Import individual Drive files or all supported files in selected folders.
+ * Each selection carries a list of organization role IDs for document access.
  * Response: { results: [{ file_id, filename, status: 'success'|'error', chunk_count?, error? }] }
  */
 export async function importDriveFiles(files) {

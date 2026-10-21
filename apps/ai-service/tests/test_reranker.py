@@ -9,8 +9,8 @@ rbac = RBACContext(
     org_id="org-1",
     workspace_id="ws-1",
     department_id="dept-1",
-    role="Manager",
-    allowed_roles=["Admin", "Manager"],
+    role_id="role-manager",
+    allowed_role_ids=["role-admin", "role-manager"],
 )
 
 query = "What is RBAC?"

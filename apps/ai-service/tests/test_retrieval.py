@@ -50,7 +50,7 @@ def test_zero_score_chunks_excluded():
         assert r.score > 0
 
 
-def test_rbac_filter_sends_all_4_fields():
+def test_rbac_filter_uses_organization_and_custom_role_ids():
     qdrant_client = pytest.importorskip(
         "qdrant_client", reason="qdrant-client not installed"
     )
@@ -63,8 +63,8 @@ def test_rbac_filter_sends_all_4_fields():
 
         rbac = RBACContext(
             org_id="org-1", workspace_id="ws-1",
-            department_id="dept-1", role="Manager",
-            allowed_roles=["Manager"],
+            department_id="dept-1", role_id="role-manager",
+            allowed_role_ids=["role-manager"],
         )
         fetch_authorized_chunks(rbac)
 
@@ -72,6 +72,26 @@ def test_rbac_filter_sends_all_4_fields():
         conditions = call_kwargs["scroll_filter"].must
         fields = [c.key for c in conditions]
         assert "org_id" in fields
-        assert "workspace_id" in fields
-        assert "department_id" in fields
-        assert "allowed_roles" in fields
+        assert "allowed_role_ids" in fields
+
+
+def test_owner_filter_is_scoped_to_organization_only():
+    pytest.importorskip("qdrant_client", reason="qdrant-client not installed")
+    with patch("retrieval.rbac_filter.get_client") as mock_client_fn:
+        mock_client = MagicMock()
+        mock_client_fn.return_value = mock_client
+        mock_client.scroll.return_value = ([], None)
+
+        from retrieval.rbac_filter import fetch_authorized_chunks
+
+        fetch_authorized_chunks(RBACContext(
+            org_id="org-1",
+            workspace_id="ws-1",
+            department_id="dept-1",
+            role_id="role-owner",
+            is_owner=True,
+            allowed_role_ids=[],
+        ))
+
+        conditions = mock_client.scroll.call_args.kwargs["scroll_filter"].must
+        assert [condition.key for condition in conditions] == ["org_id"]

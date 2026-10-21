@@ -1,25 +1,53 @@
 const bcrypt = require('bcryptjs');
-const { PrismaClient, Role } = require('@prisma/client');
+const { PrismaClient } = require('@prisma/client');
 const crypto = require('crypto');
 const { validatePassword } = require('../utils/passwordPolicy');
+const { PERMISSIONS } = require('../utils/permissions');
 const prisma = new PrismaClient();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Finds a user only inside the admin's own organization
+// Finds a member only inside the caller's organization.
 function findUserInOrg(id, orgId) {
   return prisma.user.findFirst({
     where: { id, department: { workspace: { org_id: orgId } } },
-    select: { id: true, email: true, role: true, department_id: true, active: true },
+    select: {
+      id: true,
+      email: true,
+      role_id: true,
+      role: { select: { id: true, name: true, is_owner: true, permissions: true } },
+      department_id: true,
+      active: true,
+    },
   });
 }
-// POST /admin/users  (Admin only)
+function permissionsWithinActor(permissions, req) {
+  return req.user.is_owner ||
+    permissions.every((permission) => req.user.permissions.includes(permission));
+}
+
+async function findAssignableRole(roleId, orgId) {
+  return prisma.organizationRole.findFirst({
+    where: { id: roleId, org_id: orgId, is_owner: false },
+    select: { id: true, name: true, permissions: true },
+  });
+}
+
+async function isOrganizationOwner(userId, orgId) {
+  const organization = await prisma.organization.findFirst({
+    where: { id: orgId, owner_user_id: userId },
+    select: { id: true },
+  });
+  return Boolean(organization);
+}
+
+// POST /admin/users
 async function createUser(req, res) {
   try {
-    const { email, password, role, department_id } = req.body || {};
+    const { email, password, role_id: roleId, department_id: departmentId } = req.body || {};
 
-    if (![email, password, role, department_id].every((v) => typeof v === 'string' && v)) {
+    if (![email, password, roleId, departmentId].every((v) => typeof v === 'string' && v)) {
       return res.status(400).json({
-        error: 'email, password, role and department_id are required',
+        error: 'email, password, role_id and department_id are required',
       });
     }
     if (!EMAIL_RE.test(email)) {
@@ -29,21 +57,21 @@ async function createUser(req, res) {
     if (passwordErrors.length) {
       return res.status(400).json({ error: passwordErrors.join(' '), code: 'WEAK_PASSWORD' });
     }
-    if (!Object.values(Role).includes(role)) {
-      return res.status(400).json({
-        error: `role must be one of: ${Object.values(Role).join(', ')}`,
-      });
-    }
-
-    // The department must belong to the admin's OWN organization.
-    // Otherwise an admin could create users inside someone else's org.
-    const department = await prisma.department.findUnique({
-      where: { id: department_id },
-      include: { workspace: true },
-    });
-    if (!department || department.workspace.org_id !== req.user.org_id) {
-      // Same answer for "doesn't exist" and "not yours", so ids can't be probed
+    const [department, role] = await Promise.all([
+      prisma.department.findFirst({
+        where: { id: departmentId, workspace: { org_id: req.user.org_id } },
+        select: { id: true },
+      }),
+      findAssignableRole(roleId, req.user.org_id),
+    ]);
+    if (!department) {
       return res.status(404).json({ error: 'Department not found' });
+    }
+    if (!role) {
+      return res.status(404).json({ error: 'Role not found' });
+    }
+    if (!permissionsWithinActor(role.permissions, req)) {
+      return res.status(403).json({ error: 'You cannot assign a role with permissions you do not have' });
     }
 
     const password_hash = await bcrypt.hash(password, 10);
@@ -52,14 +80,22 @@ async function createUser(req, res) {
       data: {
         email: email.trim().toLowerCase(),
         password_hash,
-        role,
-        department_id,
+        role_id: role.id,
+        department_id: department.id,
       },
-      // Never send password_hash back
-      select: { id: true, email: true, role: true, department_id: true },
+      select: {
+        id: true,
+        email: true,
+        role_id: true,
+        role: { select: { id: true, name: true } },
+        department_id: true,
+        active: true,
+      },
     });
 
-    res.status(201).json({ user });
+    res.status(201).json({
+      user: { ...user, role: role.name, role_is_owner: false },
+    });
   } catch (err) {
     // P2002 = unique constraint failed (email already exists)
     if (err.code === 'P2002') {
@@ -69,17 +105,11 @@ async function createUser(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
-// GET /admin/users  (Admin only)
-// Optional filters: ?department_id=...&role=...&limit=50&offset=0
+// GET /admin/users
+// Optional filters: ?department_id=...&role_id=...&limit=50&offset=0
 async function listUsers(req, res) {
   try {
-    const { department_id, role } = req.query;
-
-    if (role && !Object.values(Role).includes(role)) {
-      return res.status(400).json({
-        error: `role must be one of: ${Object.values(Role).join(', ')}`,
-      });
-    }
+    const { department_id: departmentId, role_id: roleId } = req.query;
 
     // Read limit/offset as numbers, with safe defaults and a cap
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
@@ -89,14 +119,21 @@ async function listUsers(req, res) {
     // The other filters only narrow the result inside that org.
     const where = {
       department: { workspace: { org_id: req.user.org_id } },
-      ...(department_id && { department_id }),
-      ...(role && { role }),
+      ...(departmentId && { department_id: departmentId }),
+      ...(roleId && { role_id: roleId }),
     };
 
     const [users, total] = await Promise.all([
       prisma.user.findMany({
         where,
-        select: { id: true, email: true, role: true, department_id: true },
+        select: {
+          id: true,
+          email: true,
+          role_id: true,
+          role: { select: { id: true, name: true, is_owner: true } },
+          department_id: true,
+          active: true,
+        },
         orderBy: { email: 'asc' },
         take: limit,
         skip: offset,
@@ -104,7 +141,16 @@ async function listUsers(req, res) {
       prisma.user.count({ where }),
     ]);
 
-    res.json({ users, total, limit, offset });
+    res.json({
+      users: users.map(({ role, ...user }) => ({
+        ...user,
+        role: role.name,
+        role_is_owner: role.is_owner,
+      })),
+      total,
+      limit,
+      offset,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong' });
@@ -167,7 +213,11 @@ async function getWorkspaceDashboard(req, res) {
             _count: { select: { users: true, documents: true } },
             users: {
               orderBy: { email: 'asc' },
-              select: { id: true, email: true, role: true },
+              select: {
+                id: true,
+                email: true,
+                role: { select: { id: true, name: true } },
+              },
             },
           },
         },
@@ -183,7 +233,11 @@ async function getWorkspaceDashboard(req, res) {
       name: department.name,
       member_count: department._count.users,
       document_count: department._count.documents,
-      members: department.users,
+      members: department.users.map(({ role, ...member }) => ({
+        ...member,
+        role_id: role.id,
+        role: role.name,
+      })),
     }));
 
     res.json({
@@ -285,13 +339,17 @@ async function listDepartments(req, res) {
     res.status(500).json({ error: 'Something went wrong' });
   }
 }
-// PATCH /admin/users/:id  (Admin only)
+// PATCH /admin/users/:id
 async function updateUser(req, res) {
   try {
     const target = await findUserInOrg(req.params.id, req.user.org_id);
     if (!target) return res.status(404).json({ error: 'User not found' });
 
-    const { email, role, department_id } = req.body || {};
+    if (await isOrganizationOwner(target.id, req.user.org_id)) {
+      return res.status(403).json({ error: 'The organization Owner account cannot be changed here' });
+    }
+
+    const { email, role_id: roleId, department_id: departmentId } = req.body || {};
     const data = {};
 
     if (email !== undefined) {
@@ -301,22 +359,24 @@ async function updateUser(req, res) {
       data.email = email.trim().toLowerCase();
     }
 
-    if (role !== undefined) {
-      if (!Object.values(Role).includes(role)) {
-        return res.status(400).json({ error: `role must be one of: ${Object.values(Role).join(', ')}` });
-      }
-      if (target.id === req.user.user_id && role !== target.role) {
+    if (roleId !== undefined) {
+      if (target.id === req.user.user_id) {
         return res.status(400).json({ error: 'You cannot change your own role' });
       }
-      data.role = role;
+      const role = await findAssignableRole(roleId, req.user.org_id);
+      if (!role) return res.status(404).json({ error: 'Role not found' });
+      if (!permissionsWithinActor(role.permissions, req)) {
+        return res.status(403).json({ error: 'You cannot assign a role with permissions you do not have' });
+      }
+      data.role_id = role.id;
     }
 
-    if (department_id !== undefined) {
+    if (departmentId !== undefined) {
       const dept = await prisma.department.findFirst({
-        where: { id: department_id, workspace: { org_id: req.user.org_id } },
+        where: { id: departmentId, workspace: { org_id: req.user.org_id } },
       });
       if (!dept) return res.status(404).json({ error: 'Department not found' });
-      data.department_id = department_id;
+      data.department_id = departmentId;
     }
 
     if (!Object.keys(data).length) {
@@ -326,9 +386,22 @@ async function updateUser(req, res) {
     const user = await prisma.user.update({
       where: { id: target.id },
       data,
-      select: { id: true, email: true, role: true, department_id: true, active: true },
+      select: {
+        id: true,
+        email: true,
+        role_id: true,
+        role: { select: { id: true, name: true, is_owner: true } },
+        department_id: true,
+        active: true,
+      },
     });
-    res.json({ user });
+    res.json({
+      user: {
+        ...user,
+        role: user.role.name,
+        role_is_owner: user.role.is_owner,
+      },
+    });
   } catch (err) {
     if (err.code === 'P2002') {
       return res.status(409).json({ error: 'A user with that email already exists' });
@@ -343,6 +416,15 @@ async function resetPassword(req, res) {
   try {
     const target = await findUserInOrg(req.params.id, req.user.org_id);
     if (!target) return res.status(404).json({ error: 'User not found' });
+    if (
+      target.role.is_owner ||
+      await isOrganizationOwner(target.id, req.user.org_id)
+    ) {
+      return res.status(403).json({ error: 'The organization Owner must change their own password' });
+    }
+    if (target.id === req.user.user_id) {
+      return res.status(400).json({ error: 'Use self-service password change for your account' });
+    }
 
     const tempPassword = crypto.randomBytes(9).toString('base64url');
     const password_hash = await bcrypt.hash(tempPassword, 10);
@@ -369,6 +451,12 @@ async function setActive(req, res, active) {
   try {
     const target = await findUserInOrg(req.params.id, req.user.org_id);
     if (!target) return res.status(404).json({ error: 'User not found' });
+    if (
+      target.role.is_owner ||
+      await isOrganizationOwner(target.id, req.user.org_id)
+    ) {
+      return res.status(403).json({ error: 'The organization Owner account cannot be deactivated' });
+    }
 
     if (!active && target.id === req.user.user_id) {
       return res.status(400).json({ error: 'You cannot deactivate your own account' });

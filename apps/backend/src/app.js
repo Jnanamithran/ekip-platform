@@ -18,6 +18,7 @@ app.use(cors({ origin: frontendOrigins }));
 // Authentication and RBAC routes
 app.use('/auth', require('./routes/auth.routes'));
 app.use('/admin', require('./routes/admin.routes'));
+app.use('/roles', require('./routes/roles.routes'));
 app.use('/organizations', require('./routes/organization.routes'));
 app.use('/integrations', require('./routes/integrations.routes'));
 // AI service proxy routes (query, ingest, health)

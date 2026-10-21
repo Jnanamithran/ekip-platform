@@ -1,8 +1,12 @@
 const { verifyAccessToken } = require('../utils/jwt');
+const { PrismaClient } = require('@prisma/client');
+const { OWNER_PERMISSIONS } = require('../utils/permissions');
+
+const prisma = new PrismaClient();
 
 // Runs before any protected route. Reads the token, checks it,
 // and attaches the user's identity to req.user.
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   // Tokens arrive as:  Authorization: Bearer <token>
   const header = req.headers.authorization || '';
   const [scheme, token] = header.split(' ');
@@ -13,33 +17,83 @@ function authenticate(req, res, next) {
 
   try {
     const claims = verifyAccessToken(token);
+    if (typeof claims.user_id !== 'string') {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
 
-    // Copy only the fields we expect, using the agreed names.
-    // The AI service reads these, so they must come from the token,
-    // never from the request body.
+    const user = await prisma.user.findUnique({
+      where: { id: claims.user_id },
+      select: {
+        id: true,
+        email: true,
+        active: true,
+        role_id: true,
+        department_id: true,
+        role: { select: { id: true, name: true, permissions: true, is_owner: true } },
+        department: {
+          select: {
+            name: true,
+            workspace_id: true,
+            workspace: {
+              select: {
+                org_id: true,
+                organization: { select: { owner_user_id: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!user || !user.active) {
+      return res.status(401).json({ error: 'Invalid or inactive account' });
+    }
+    const isOwner = user.department.workspace.organization.owner_user_id === user.id;
+
     req.user = {
-      user_id: claims.user_id,
-      org_id: claims.org_id,
-      workspace_id: claims.workspace_id,
-      department_id: claims.department_id,
-      role: claims.role,
+      user_id: user.id,
+      email: user.email,
+      org_id: user.department.workspace.org_id,
+      workspace_id: user.department.workspace_id,
+      department_id: user.department_id,
+      department: user.department.name,
+      role_id: user.role_id,
+      role: isOwner ? 'Owner' : user.role.name,
+      permissions: isOwner ? OWNER_PERMISSIONS : user.role.permissions,
+      is_owner: isOwner,
     };
     next();
   } catch (err) {
-    // Fake, edited, or expired token
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    console.error('[auth] request authentication failed:', err.message);
+    return res.status(500).json({ error: 'Could not authenticate request' });
   }
 }
 
-// Use after authenticate: only lets listed roles through.
-// Example: router.post('/users', authenticate, requireRole('Admin'), handler)
-function requireRole(...allowedRoles) {
+function requirePermission(permission) {
   return (req, res, next) => {
-    if (!req.user || !allowedRoles.includes(req.user.role)) {
+    if (
+      !req.user ||
+      (!req.user.is_owner && !req.user.permissions.includes(permission))
+    ) {
       return res.status(403).json({ error: 'You do not have permission to do this' });
     }
     next();
   };
 }
 
-module.exports = { authenticate, requireRole };
+function requireAnyPermission(...permissions) {
+  return (req, res, next) => {
+    if (
+      !req.user ||
+      (!req.user.is_owner &&
+        !permissions.some((permission) => req.user.permissions.includes(permission)))
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to do this' });
+    }
+    next();
+  };
+}
+
+module.exports = { authenticate, requirePermission, requireAnyPermission };
