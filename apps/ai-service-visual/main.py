@@ -45,6 +45,7 @@ class VisualSearchRequest(BaseModel):
     org_id:      str
     workspace_id: str
     department_id: str
+    department_ids: list[str] = []
     role_id:     str
     is_owner:    bool = False
     top_k:       int = 4
@@ -76,6 +77,7 @@ class VisualQARequest(BaseModel):
     org_id:       str
     workspace_id: str
     department_id: str
+    department_ids: list[str] = []
     role_id:      str
     is_owner:     bool = False
     top_k:        int = 4
@@ -191,6 +193,7 @@ def search(req: VisualSearchRequest):
             "org_id":        req.org_id,
             "workspace_id":  req.workspace_id,
             "department_id": req.department_id,
+            "department_ids": req.department_ids or [req.department_id],
             "role_id":       req.role_id,
             "is_owner":      req.is_owner,
         }
@@ -232,6 +235,7 @@ async def ask_visual(req: VisualQARequest):
             "org_id":        req.org_id,
             "workspace_id":  req.workspace_id,
             "department_id": req.department_id,
+            "department_ids": req.department_ids or [req.department_id],
             "role_id":       req.role_id,
             "is_owner":      req.is_owner,
         }

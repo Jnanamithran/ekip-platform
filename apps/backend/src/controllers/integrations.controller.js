@@ -7,7 +7,11 @@ const {
   signOAuthState,
   verifyOAuthState,
 } = require('../utils/integrationSecurity');
-const { ingestDocument, validateAllowedRoleIds } = require('./ai.controller');
+const { ingestDocument } = require('./ai.controller');
+const {
+  validateAllowedRoleIds,
+  validateDocumentDepartment,
+} = require('../services/documentAuthorization');
 
 const prisma = new PrismaClient();
 
@@ -253,38 +257,6 @@ async function importFiles(req, res) {
     return res.status(400).json({ error: `Send between 1 and ${MAX_FILES_PER_IMPORT} files` });
   }
 
-  // Validate any department IDs referenced
-  const deptIdsToCheck = new Set();
-  if (typeof department_id === 'string' && department_id.trim()) {
-    deptIdsToCheck.add(department_id.trim());
-  }
-  if (folder_mappings && typeof folder_mappings === 'object') {
-    Object.values(folder_mappings).forEach((id) => {
-      if (typeof id === 'string' && id.trim()) deptIdsToCheck.add(id.trim());
-    });
-  }
-  for (const f of files) {
-    if (f && typeof f.department_id === 'string' && f.department_id.trim()) {
-      deptIdsToCheck.add(f.department_id.trim());
-    }
-  }
-
-  if (deptIdsToCheck.size > 0) {
-    const validDepts = await prisma.department.findMany({
-      where: {
-        id: { in: Array.from(deptIdsToCheck) },
-        workspace: { org_id: req.user.org_id },
-      },
-      select: { id: true },
-    });
-    const validIds = new Set(validDepts.map((d) => d.id));
-    for (const id of deptIdsToCheck) {
-      if (!validIds.has(id)) {
-        return res.status(400).json({ error: `Invalid department specified: ${id}` });
-      }
-    }
-  }
-
   const validatedFiles = [];
   for (const f of files) {
     if (
@@ -296,20 +268,24 @@ async function importFiles(req, res) {
         error: 'Each selection needs a valid file_id and optional is_folder flag',
       });
     }
-    const access = await validateAllowedRoleIds(
-      f.allowed_role_ids || [req.user.role_id],
-      req.user
-    );
-    if (access.error) return res.status(400).json({ error: access.error });
     const targetDeptId = (typeof f.department_id === 'string' && f.department_id.trim()) ||
       (folder_mappings && typeof folder_mappings[f.file_id] === 'string' && folder_mappings[f.file_id].trim()) ||
       (typeof department_id === 'string' && department_id.trim()) ||
       undefined;
+    if (!targetDeptId) {
+      return res.status(400).json({ error: `A department is required for ${f.file_id}` });
+    }
+    const department = await validateDocumentDepartment(prisma, req.user, targetDeptId);
+    if (department.error) {
+      return res.status(department.status).json({ error: department.error });
+    }
+    const access = await validateAllowedRoleIds(prisma, f.allowed_role_ids || [req.user.role_id], req.user);
+    if (access.error) return res.status(400).json({ error: access.error });
 
     validatedFiles.push({
       ...f,
       allowed_role_ids: access.roleIds,
-      department_id: targetDeptId,
+      department_id: department.departmentId,
     });
   }
 

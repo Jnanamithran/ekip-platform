@@ -33,12 +33,20 @@ def fetch_authorized_chunks(rbac: RBACContext) -> List[Dict[str, Any]]:
 
     conditions = [
         FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
+        FieldCondition(key="workspace_id", match=MatchValue(value=rbac.workspace_id)),
     ]
     if not rbac.is_owner:
+        department_ids = rbac.department_ids or [rbac.department_id]
+        if not department_ids:
+            return []
         conditions.extend([
             FieldCondition(
                 key="allowed_role_ids",
                 match=MatchAny(any=rbac.allowed_role_ids),
+            ),
+            FieldCondition(
+                key="department_id",
+                match=MatchAny(any=department_ids),
             ),
         ])
     query_filter = Filter(must=conditions)

@@ -4,6 +4,13 @@ const fs = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { PrismaClient } = require('@prisma/client');
+const {
+  documentAccessWhere,
+  qdrantAccessFilter,
+  validateDocumentDepartment,
+  validateAllowedRoleIds,
+  getAuthorizedDocumentIds,
+} = require('../services/documentAuthorization');
 
 // AI service base URL (set via env in Docker; default to localhost for dev)
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
@@ -37,64 +44,11 @@ function rbacFromReq(req) {
     org_id       : req.user.org_id,
     workspace_id : req.user.workspace_id,
     department_id: req.user.department_id,
+    department_ids: req.user.department_ids || [req.user.department_id],
     role_id      : req.user.role_id,
+    allowed_role_ids: [req.user.role_id],
     is_owner     : req.user.is_owner,
   };
-}
-
-function documentAccessWhere(req, { manageAccess = false } = {}) {
-  const canManageAccess =
-    manageAccess &&
-    (req.user.is_owner || req.user.permissions.includes('documents:manage_access'));
-  return {
-    department: {
-      workspace: { org_id: req.user.org_id },
-    },
-    ...(!req.user.is_owner && !canManageAccess && {
-      allowed_roles: { some: { role_id: req.user.role_id } },
-    }),
-  };
-}
-
-function qdrantAccessFilter(req, { manageAccess = false } = {}) {
-  const must = [{ key: 'org_id', match: { value: req.user.org_id } }];
-  const canManageAccess =
-    manageAccess &&
-    (req.user.is_owner || req.user.permissions.includes('documents:manage_access'));
-  if (!req.user.is_owner && !canManageAccess) {
-    must.push({ key: 'allowed_role_ids', match: { value: req.user.role_id } });
-  }
-  return { must };
-}
-
-async function validateAllowedRoleIds(allowedRoleIds, user) {
-  if (
-    !Array.isArray(allowedRoleIds) ||
-    !allowedRoleIds.length ||
-    allowedRoleIds.some((id) => typeof id !== 'string') ||
-    new Set(allowedRoleIds).size !== allowedRoleIds.length
-  ) {
-    return { error: 'allowed_role_ids must be a non-empty list of role IDs' };
-  }
-
-  const roles = await prisma.organizationRole.findMany({
-    where: { id: { in: allowedRoleIds }, org_id: user.org_id },
-    select: { id: true },
-  });
-  if (roles.length !== allowedRoleIds.length) {
-    return { error: 'Every document access role must belong to your organization' };
-  }
-  if (!user.is_owner && !allowedRoleIds.includes(user.role_id)) {
-    return { error: 'Document access must include your own role' };
-  }
-  if (
-    !user.is_owner &&
-    !user.permissions.includes('documents:manage_access') &&
-    (allowedRoleIds.length !== 1 || allowedRoleIds[0] !== user.role_id)
-  ) {
-    return { error: 'You do not have permission to assign document access roles' };
-  }
-  return { roleIds: allowedRoleIds };
 }
 
 // --- Health check ---
@@ -152,6 +106,16 @@ async function ask(req, res) {
       excerpt: s.excerpt,
       type: s.type || 'text',
     }));
+    const authorizedDocumentIds = await getAuthorizedDocumentIds(
+      prisma,
+      req.user,
+      sources.map((source) => source.document_id)
+    );
+    if (sources.some((source) => !authorizedDocumentIds.has(source.document_id))) {
+      return res.status(409).json({
+        error: 'Document access changed while the search was running. Please try again.',
+      });
+    }
     const sourceDocumentCount = new Set(sources.map((source) => source.filename)).size;
     const answerSummary = sources.length
       ? `This answer is based on ${sources.length} cited passage${sources.length === 1 ? '' : 's'} from ${sourceDocumentCount} document${sourceDocumentCount === 1 ? '' : 's'}.`
@@ -196,8 +160,27 @@ async function listAnswerHistory(req, res) {
       orderBy: { created_at: 'desc' },
       take: 100,
     });
+    const sourcefulEntries = entries.filter(
+      (entry) => Array.isArray(entry.sources) && entry.sources.length > 0
+    );
+    const authorizedDocumentIds = await getAuthorizedDocumentIds(
+      prisma,
+      req.user,
+      sourcefulEntries.flatMap((entry) =>
+        entry.sources.map((source) => source?.document_id)
+      )
+    );
+    const visibleEntries = entries.filter((entry) => {
+      if (!Array.isArray(entry.sources)) return false;
+      const sources = entry.sources;
+      return sources.every(
+        (source) =>
+          typeof source?.document_id === 'string' &&
+          authorizedDocumentIds.has(source.document_id)
+      );
+    });
     res.json({
-      entries: entries.reverse().map((entry) => {
+      entries: visibleEntries.reverse().map((entry) => {
         const sources = Array.isArray(entry.sources) ? entry.sources : [];
         const documentCount = new Set(sources.map((source) => source.filename)).size;
         return {
@@ -285,23 +268,14 @@ async function ingestDocument({
   allowedRoleIds,
   departmentId,
 }) {
-  const access = await validateAllowedRoleIds(allowedRoleIds, user);
+  const access = await validateAllowedRoleIds(prisma, allowedRoleIds, user);
   if (access.error) return { status: 400, body: { error: access.error } };
 
-  let targetDepartmentId = user.department_id;
-  if (departmentId) {
-    const dept = await prisma.department.findFirst({
-      where: {
-        id: departmentId,
-        workspace: { org_id: user.org_id },
-      },
-      select: { id: true },
-    });
-    if (!dept) {
-      return { status: 400, body: { error: 'Invalid department specified' } };
-    }
-    targetDepartmentId = dept.id;
+  const department = await validateDocumentDepartment(prisma, user, departmentId);
+  if (department.error) {
+    return { status: department.status, body: { error: department.error } };
   }
+  const targetDepartmentId = department.departmentId;
 
   const documentId = randomUUID();
   let documentCreated = false;
@@ -480,12 +454,12 @@ async function setDocumentVectorAccess(collection, documentId, orgId, roleIds) {
 async function updateDocumentAccess(req, res) {
   const { id } = req.params;
   const { allowed_role_ids: allowedRoleIds } = req.body || {};
-  const access = await validateAllowedRoleIds(allowedRoleIds, req.user);
+  const access = await validateAllowedRoleIds(prisma, allowedRoleIds, req.user);
   if (access.error) return res.status(400).json({ error: access.error });
 
   try {
     const document = await prisma.document.findFirst({
-      where: { id, department: { workspace: { org_id: req.user.org_id } } },
+      where: { id, ...documentAccessWhere(req.user, { manageAccess: true }) },
       select: { id: true, department_id: true, status: true },
     });
     if (!document) return res.status(404).json({ error: 'Document not found' });
@@ -519,7 +493,7 @@ async function reindexDocument(req, res) {
 
   try {
     const document = await prisma.document.findFirst({
-      where: { id, ...documentAccessWhere(req) },
+      where: { id, ...documentAccessWhere(req.user) },
       include: {
         allowed_roles: { select: { role_id: true } },
         department: {
@@ -568,7 +542,7 @@ async function reindexDocument(req, res) {
     const claimed = await prisma.document.updateMany({
       where: {
         id,
-        ...documentAccessWhere(req),
+        ...documentAccessWhere(req.user),
         status: { not: 'Processing' },
       },
       data: {
@@ -648,7 +622,7 @@ async function reindexDocument(req, res) {
 async function listDocuments(req, res) {
   try {
     const savedDocuments = await prisma.document.findMany({
-      where: documentAccessWhere(req, { manageAccess: true }),
+      where: documentAccessWhere(req.user, { manageAccess: true }),
       select: {
         id: true,
         department_id: true,
@@ -675,7 +649,7 @@ async function listDocuments(req, res) {
         const response = await axios.post(
           `${QDRANT_URL}/collections/ekip_documents/points/scroll`,
           {
-            filter: qdrantAccessFilter(req, { manageAccess: true }),
+            filter: qdrantAccessFilter(req.user, { manageAccess: true }),
             limit: 5000,
             offset,
             with_payload: ['document_id', 'filename', 'file_type'],
@@ -744,7 +718,7 @@ async function previewDocument(req, res) {
     const document = await prisma.document.findFirst({
       where: {
         id: req.params.id,
-        ...documentAccessWhere(req),
+        ...documentAccessWhere(req.user),
         file_type: 'pdf',
         storage_key: { not: null },
       },
@@ -803,7 +777,7 @@ async function getDocumentPageImage(req, res) {
     const document = await prisma.document.findFirst({
       where: {
         id,
-        ...documentAccessWhere(req),
+        ...documentAccessWhere(req.user),
       },
       select: { id: true },
     });
@@ -853,7 +827,7 @@ async function deleteDocument(req, res) {
     document = await prisma.document.findFirst({
       where: {
         id,
-        ...documentAccessWhere(req),
+        ...documentAccessWhere(req.user),
       },
     });
 
@@ -864,7 +838,7 @@ async function deleteDocument(req, res) {
     const filter = {
       must: [
         { key: 'document_id', match: { value: id } },
-        ...qdrantAccessFilter(req).must,
+        ...qdrantAccessFilter(req.user).must,
       ],
     };
 
@@ -925,7 +899,7 @@ async function updateDocumentProgress(req, res) {
     const result = await prisma.document.updateMany({
       where: {
         id,
-        ...documentAccessWhere(req),
+        ...documentAccessWhere(req.user),
         status: 'Processing',
       },
       data: { stage, progress, ...(chunkCount === undefined ? {} : { chunk_count: chunkCount }) },
@@ -948,7 +922,8 @@ module.exports = {
   getAskProgress,
   listAnswerHistory,
   clearAnswerHistory,
-  ingest,  ingestDocument,
+  ingest,
+  ingestDocument,
   validateAllowedRoleIds,
   reindexDocument,
   listDocuments,

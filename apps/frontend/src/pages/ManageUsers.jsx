@@ -28,12 +28,13 @@ export default function ManageUsers() {
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ email: "", role_id: "", department_id: "" });
+  const [form, setForm] = useState({ email: "", role_id: "", department_id: "", additional_department_ids: [] });
   const [newUser, setNewUser] = useState({
     email: "",
     password: "",
     role_id: "",
     department_id: "",
+    additional_department_ids: [],
   });
   const [tempPw, setTempPw] = useState(null); // { email, password }
   const [copied, setCopied] = useState(false);
@@ -99,6 +100,7 @@ export default function ManageUsers() {
       email: user.email,
       role_id: user.role_id,
       department_id: user.department_id ?? "",
+      additional_department_ids: user.additional_department_ids ?? [],
     });
   }
 
@@ -109,6 +111,11 @@ export default function ManageUsers() {
     if (form.role_id !== user.role_id) body.role_id = form.role_id;
     if (form.department_id && form.department_id !== user.department_id) {
       body.department_id = form.department_id;
+    }
+    const nextAdditional = (form.additional_department_ids || []).filter((id) => id && id !== (form.department_id || user.department_id));
+    const prevAdditional = user.additional_department_ids || [];
+    if (JSON.stringify([...new Set(nextAdditional)].sort()) !== JSON.stringify([...new Set(prevAdditional)].sort())) {
+      body.additional_department_ids = [...new Set(nextAdditional)];
     }
 
     if (!Object.keys(body).length) {
@@ -136,6 +143,7 @@ export default function ManageUsers() {
         password: "",
         role_id: assignableRoles[0]?.id || "",
         department_id: "",
+        additional_department_ids: [],
       });
       setNotice("User created.");
     } catch (err) {
@@ -241,6 +249,31 @@ export default function ManageUsers() {
               <option key={department.id} value={department.id}>{department.name}</option>
             ))}
           </select>
+          <div className="sm:col-span-2">
+            <p className="mb-1 text-xs text-slate">Additional departments (optional)</p>
+            <div className="flex flex-wrap gap-3">
+              {departments
+                .filter((department) => department.id !== newUser.department_id)
+                .map((department) => (
+                  <label key={department.id} className="flex items-center gap-1.5 text-xs text-ink">
+                    <input
+                      type="checkbox"
+                      checked={newUser.additional_department_ids.includes(department.id)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setNewUser((current) => ({
+                          ...current,
+                          additional_department_ids: checked
+                            ? [...current.additional_department_ids, department.id]
+                            : current.additional_department_ids.filter((id) => id !== department.id),
+                        }));
+                      }}
+                    />
+                    {department.name}
+                  </label>
+                ))}
+            </div>
+          </div>
           <button
             className={`${linkBtn} justify-self-start`}
             type="submit"
@@ -278,6 +311,7 @@ export default function ManageUsers() {
                     </span>
                     <span className="text-xs text-slate">
                       {deptName(user.department_id)}
+                      {user.additional_departments?.length ? ` + ${user.additional_departments.map((d) => d.name || deptName(d.id)).join(", ")}` : ""}
                     </span>
                   </div>
                   {inactive && <Badge>Inactive</Badge>}
@@ -314,6 +348,28 @@ export default function ManageUsers() {
                           <option key={d.id} value={d.id}>{d.name}</option>
                         ))}
                       </select>
+                    </div>
+                    <div className="flex flex-wrap gap-3 pl-1">
+                      {departments
+                        .filter((department) => department.id !== (form.department_id || user.department_id))
+                        .map((department) => (
+                          <label key={department.id} className="flex items-center gap-1.5 text-xs text-ink">
+                            <input
+                              type="checkbox"
+                              checked={form.additional_department_ids.includes(department.id)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setForm((current) => ({
+                                  ...current,
+                                  additional_department_ids: checked
+                                    ? [...current.additional_department_ids, department.id]
+                                    : current.additional_department_ids.filter((id) => id !== department.id),
+                                }));
+                              }}
+                            />
+                            {department.name}
+                          </label>
+                        ))}
                     </div>
                     <div className="flex gap-3">
                       <button className={linkBtn} disabled={busy} onClick={() => saveEdit(user)}>

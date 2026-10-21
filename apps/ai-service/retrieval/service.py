@@ -52,10 +52,17 @@ def _dense_search(
         FieldCondition(key="org_id", match=MatchValue(value=rbac.org_id)),
     ]
     if not rbac.is_owner:
+        department_ids = rbac.department_ids or [rbac.department_id]
+        if not department_ids:
+            return []
         conditions.extend([
             FieldCondition(
                 key="allowed_role_ids",
                 match=MatchAny(any=rbac.allowed_role_ids),
+            ),
+            FieldCondition(
+                key="department_id",
+                match=MatchAny(any=department_ids),
             ),
         ])
     qdrant_filter = Filter(must=conditions)

@@ -6,10 +6,10 @@ const { PERMISSIONS } = require('../utils/permissions');
 const prisma = new PrismaClient();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Finds a member only inside the caller's organization.
-function findUserInOrg(id, orgId) {
+// Finds a member only inside the caller's workspace.
+function findUserInWorkspace(id, workspaceId) {
   return prisma.user.findFirst({
-    where: { id, department: { workspace: { org_id: orgId } } },
+    where: { id, department: { workspace_id: workspaceId } },
     select: {
       id: true,
       email: true,
@@ -43,7 +43,7 @@ async function isOrganizationOwner(userId, orgId) {
 // POST /admin/users
 async function createUser(req, res) {
   try {
-    const { email, password, role_id: roleId, department_id: departmentId } = req.body || {};
+    const { email, password, role_id: roleId, department_id: departmentId, additional_department_ids: additionalDepartmentIds } = req.body || {};
 
     if (![email, password, roleId, departmentId].every((v) => typeof v === 'string' && v)) {
       return res.status(400).json({
@@ -59,7 +59,7 @@ async function createUser(req, res) {
     }
     const [department, role] = await Promise.all([
       prisma.department.findFirst({
-        where: { id: departmentId, workspace: { org_id: req.user.org_id } },
+        where: { id: departmentId, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
         select: { id: true },
       }),
       findAssignableRole(roleId, req.user.org_id),
@@ -74,6 +74,23 @@ async function createUser(req, res) {
       return res.status(403).json({ error: 'You cannot assign a role with permissions you do not have' });
     }
 
+    let normalizedAdditionalIds = [];
+    if (additionalDepartmentIds !== undefined) {
+      if (!Array.isArray(additionalDepartmentIds) || additionalDepartmentIds.some((id) => typeof id !== 'string' || !id)) {
+        return res.status(400).json({ error: 'additional_department_ids must be an array of department IDs' });
+      }
+      normalizedAdditionalIds = [...new Set(additionalDepartmentIds.filter((id) => id !== departmentId))];
+      if (normalizedAdditionalIds.length) {
+        const validDepartments = await prisma.department.findMany({
+          where: { id: { in: normalizedAdditionalIds }, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
+          select: { id: true },
+        });
+        if (validDepartments.length !== normalizedAdditionalIds.length) {
+          return res.status(404).json({ error: 'One or more additional departments were not found' });
+        }
+      }
+    }
+
     const password_hash = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
@@ -82,6 +99,9 @@ async function createUser(req, res) {
         password_hash,
         role_id: role.id,
         department_id: department.id,
+        authorized_departments: {
+          create: normalizedAdditionalIds.map((id) => ({ department_id: id })),
+        },
       },
       select: {
         id: true,
@@ -89,12 +109,18 @@ async function createUser(req, res) {
         role_id: true,
         role: { select: { id: true, name: true } },
         department_id: true,
+        authorized_departments: { select: { department_id: true } },
         active: true,
       },
     });
 
     res.status(201).json({
-      user: { ...user, role: role.name, role_is_owner: false },
+      user: {
+        ...user,
+        additional_department_ids: user.authorized_departments.map((grant) => grant.department_id),
+        role: role.name,
+        role_is_owner: false,
+      },
     });
   } catch (err) {
     // P2002 = unique constraint failed (email already exists)
@@ -118,7 +144,7 @@ async function listUsers(req, res) {
     // The org filter always comes from the token, never from the request.
     // The other filters only narrow the result inside that org.
     const where = {
-      department: { workspace: { org_id: req.user.org_id } },
+      department: { workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
       ...(departmentId && { department_id: departmentId }),
       ...(roleId && { role_id: roleId }),
     };
@@ -132,6 +158,7 @@ async function listUsers(req, res) {
           role_id: true,
           role: { select: { id: true, name: true, is_owner: true } },
           department_id: true,
+          authorized_departments: { select: { department_id: true, department: { select: { name: true } } } },
           active: true,
         },
         orderBy: { email: 'asc' },
@@ -142,8 +169,13 @@ async function listUsers(req, res) {
     ]);
 
     res.json({
-      users: users.map(({ role, ...user }) => ({
+      users: users.map(({ role, authorized_departments, ...user }) => ({
         ...user,
+        additional_department_ids: (authorized_departments || []).map((grant) => grant.department_id),
+        additional_departments: (authorized_departments || []).map((grant) => ({
+          id: grant.department_id,
+          name: grant.department?.name,
+        })),
         role: role.name,
         role_is_owner: role.is_owner,
       })),
@@ -168,7 +200,11 @@ async function createWorkspace(req, res) {
     // org_id comes from the token, never from the request body,
     // so an admin can only create workspaces in their own organization
     const workspace = await prisma.workspace.create({
-      data: { name: name.trim(), org_id: req.user.org_id },
+      data: {
+        name: name.trim(),
+        org_id: req.user.org_id,
+        departments: { create: { name: 'General', is_default: true } },
+      },
       select: { id: true, name: true, org_id: true },
     });
 
@@ -289,14 +325,14 @@ async function updateWorkspace(req, res) {
 // PATCH /admin/users/:id
 async function updateUser(req, res) {
   try {
-    const target = await findUserInOrg(req.params.id, req.user.org_id);
+    const target = await findUserInWorkspace(req.params.id, req.user.workspace_id);
     if (!target) return res.status(404).json({ error: 'User not found' });
 
     if (await isOrganizationOwner(target.id, req.user.org_id)) {
       return res.status(403).json({ error: 'The organization Owner account cannot be changed here' });
     }
 
-    const { email, role_id: roleId, department_id: departmentId } = req.body || {};
+    const { email, role_id: roleId, department_id: departmentId, additional_department_ids: additionalDepartmentIds } = req.body || {};
     const data = {};
 
     if (email !== undefined) {
@@ -320,10 +356,32 @@ async function updateUser(req, res) {
 
     if (departmentId !== undefined) {
       const dept = await prisma.department.findFirst({
-        where: { id: departmentId, workspace: { org_id: req.user.org_id } },
+        where: { id: departmentId, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
       });
       if (!dept) return res.status(404).json({ error: 'Department not found' });
       data.department_id = departmentId;
+      data.authorized_departments = { deleteMany: { department_id: departmentId } };
+    }
+
+    if (additionalDepartmentIds !== undefined) {
+      if (!Array.isArray(additionalDepartmentIds) || additionalDepartmentIds.some((id) => typeof id !== 'string' || !id)) {
+        return res.status(400).json({ error: 'additional_department_ids must be an array of department IDs' });
+      }
+      const primaryDepartmentId = departmentId !== undefined ? departmentId : target.department_id;
+      const normalizedAdditionalIds = [...new Set(additionalDepartmentIds.filter((id) => id !== primaryDepartmentId))];
+      if (normalizedAdditionalIds.length) {
+        const validDepartments = await prisma.department.findMany({
+          where: { id: { in: normalizedAdditionalIds }, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
+          select: { id: true },
+        });
+        if (validDepartments.length !== normalizedAdditionalIds.length) {
+          return res.status(404).json({ error: 'One or more additional departments were not found' });
+        }
+      }
+      data.authorized_departments = {
+        deleteMany: {},
+        create: normalizedAdditionalIds.map((id) => ({ department_id: id })),
+      };
     }
 
     if (!Object.keys(data).length) {
@@ -339,12 +397,14 @@ async function updateUser(req, res) {
         role_id: true,
         role: { select: { id: true, name: true, is_owner: true } },
         department_id: true,
+        authorized_departments: { select: { department_id: true } },
         active: true,
       },
     });
     res.json({
       user: {
         ...user,
+        additional_department_ids: (user.authorized_departments || []).map((grant) => grant.department_id),
         role: user.role.name,
         role_is_owner: user.role.is_owner,
       },
@@ -361,7 +421,7 @@ async function updateUser(req, res) {
 // POST /admin/users/:id/reset-password  (Admin only)
 async function resetPassword(req, res) {
   try {
-    const target = await findUserInOrg(req.params.id, req.user.org_id);
+    const target = await findUserInWorkspace(req.params.id, req.user.workspace_id);
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (
       target.role.is_owner ||
@@ -396,7 +456,7 @@ async function resetPassword(req, res) {
 // Shared by deactivate and reactivate
 async function setActive(req, res, active) {
   try {
-    const target = await findUserInOrg(req.params.id, req.user.org_id);
+    const target = await findUserInWorkspace(req.params.id, req.user.workspace_id);
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (
       target.role.is_owner ||
@@ -478,13 +538,14 @@ async function listDepartments(req, res) {
     const { workspace_id: workspaceId } = req.query;
     const departments = await prisma.department.findMany({
       where: {
-        workspace: { org_id: req.user.org_id },
+        workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
         ...(workspaceId && { workspace_id: workspaceId }),
       },
       select: {
         id: true,
         name: true,
         description: true,
+        is_default: true,
         workspace_id: true,
         workspace: {
           select: {
@@ -497,6 +558,7 @@ async function listDepartments(req, res) {
           select: {
             users: true,
             documents: true,
+            authorized_users: true,
           },
         },
       },
@@ -519,12 +581,13 @@ async function getDepartment(req, res) {
     const department = await prisma.department.findFirst({
       where: {
         id: departmentId,
-        workspace: { org_id: req.user.org_id },
+        workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
       },
       select: {
         id: true,
         name: true,
         description: true,
+        is_default: true,
         workspace_id: true,
         workspace: {
           select: {
@@ -537,6 +600,7 @@ async function getDepartment(req, res) {
           select: {
             users: true,
             documents: true,
+            authorized_users: true,
           },
         },
       },
@@ -561,31 +625,19 @@ async function createDepartment(req, res) {
     if (typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'Department name is required' });
     }
+    if (name.trim().length > 120) {
+      return res.status(400).json({ error: 'Department name must be 120 characters or fewer' });
+    }
 
-    let targetWorkspaceId = workspace_id;
-    if (!targetWorkspaceId) {
-      const workspace = await prisma.workspace.findFirst({
-        where: { org_id: req.user.org_id },
-        select: { id: true },
-      });
-      if (!workspace) {
-        return res.status(400).json({ error: 'No workspace found for this organization.' });
-      }
-      targetWorkspaceId = workspace.id;
-    } else {
-      const workspace = await prisma.workspace.findFirst({
-        where: { id: targetWorkspaceId, org_id: req.user.org_id },
-        select: { id: true },
-      });
-      if (!workspace) {
-        return res.status(404).json({ error: 'Workspace not found' });
-      }
+    const targetWorkspaceId = workspace_id || req.user.workspace_id;
+    if (targetWorkspaceId !== req.user.workspace_id) {
+      return res.status(404).json({ error: 'Workspace not found' });
     }
 
     const existing = await prisma.department.findFirst({
       where: {
         name: name.trim(),
-        workspace: { org_id: req.user.org_id },
+        workspace_id: targetWorkspaceId,
       },
     });
     if (existing) {
@@ -602,6 +654,7 @@ async function createDepartment(req, res) {
         id: true,
         name: true,
         description: true,
+        is_default: true,
         workspace_id: true,
         workspace: { select: { id: true, name: true } },
       },
@@ -627,9 +680,9 @@ async function updateDepartment(req, res) {
     const department = await prisma.department.findFirst({
       where: {
         id: departmentId,
-        workspace: { org_id: req.user.org_id },
+        workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, is_default: true },
     });
 
     if (!department) {
@@ -641,10 +694,13 @@ async function updateDepartment(req, res) {
       if (typeof name !== 'string' || !name.trim()) {
         return res.status(400).json({ error: 'Department name is required' });
       }
+      if (name.trim().length > 120) {
+        return res.status(400).json({ error: 'Department name must be 120 characters or fewer' });
+      }
       const duplicate = await prisma.department.findFirst({
         where: {
           name: name.trim(),
-          workspace: { org_id: req.user.org_id },
+          workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
           id: { not: departmentId },
         },
       });
@@ -665,6 +721,7 @@ async function updateDepartment(req, res) {
         id: true,
         name: true,
         description: true,
+        is_default: true,
         workspace_id: true,
         workspace: { select: { id: true, name: true } },
       },
@@ -685,26 +742,34 @@ async function deleteDepartment(req, res) {
     const department = await prisma.department.findFirst({
       where: {
         id: departmentId,
-        workspace: { org_id: req.user.org_id },
+        workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, is_default: true },
     });
 
     if (!department) {
       return res.status(404).json({ error: 'Department not found' });
     }
+    if (department.is_default) {
+      return res.status(400).json({
+        error: 'The default department cannot be deleted',
+        code: 'DEFAULT_DEPARTMENT_PROTECTED',
+      });
+    }
 
-    const [userCount, documentCount] = await Promise.all([
+    const [userCount, documentCount, authorizedUserCount] = await Promise.all([
       prisma.user.count({ where: { department_id: departmentId } }),
       prisma.document.count({ where: { department_id: departmentId } }),
+      prisma.userAuthorizedDepartment.count({ where: { department_id: departmentId } }),
     ]);
 
-    if (userCount > 0 || documentCount > 0) {
+    if (userCount > 0 || documentCount > 0 || authorizedUserCount > 0) {
       return res.status(400).json({
-        error: "Cannot delete department that has existing users (" + userCount + ") or documents (" + documentCount + "). Please reassign them first.",
+        error: "Cannot delete a department with assigned users (" + userCount + "), additional access grants (" + authorizedUserCount + "), or documents (" + documentCount + "). Reassign them first.",
         code: 'DEPARTMENT_HAS_RECORDS',
         userCount,
         documentCount,
+        authorizedUserCount,
       });
     }
 

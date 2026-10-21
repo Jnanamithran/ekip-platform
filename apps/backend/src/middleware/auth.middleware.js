@@ -42,20 +42,44 @@ async function authenticate(req, res, next) {
             },
           },
         },
+        authorized_departments: {
+          select: {
+            department: {
+              select: {
+                id: true,
+                workspace_id: true,
+                workspace: { select: { org_id: true } },
+              },
+            },
+          },
+        },
       },
     });
     if (!user || !user.active) {
       return res.status(401).json({ error: 'Invalid or inactive account' });
     }
     const isOwner = user.department.workspace.organization.owner_user_id === user.id;
+    const orgId = user.department.workspace.org_id;
+    const departmentIds = [user.department_id];
+    for (const grant of user.authorized_departments || []) {
+      const dept = grant.department;
+      if (
+        !dept ||
+        dept.workspace?.org_id !== orgId ||
+        dept.workspace_id !== user.department.workspace_id
+      ) continue;
+      if (!departmentIds.includes(dept.id)) departmentIds.push(dept.id);
+    }
 
     req.user = {
       user_id: user.id,
       email: user.email,
-      org_id: user.department.workspace.org_id,
+      org_id: orgId,
       workspace_id: user.department.workspace_id,
       department_id: user.department_id,
       department: user.department.name,
+      department_ids: departmentIds,
+      authorized_department_ids: departmentIds.filter((id) => id !== user.department_id),
       role_id: user.role_id,
       role: isOwner ? 'Owner' : user.role.name,
       permissions: isOwner ? OWNER_PERMISSIONS : user.role.permissions,

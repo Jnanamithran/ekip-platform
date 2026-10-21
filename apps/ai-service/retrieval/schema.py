@@ -16,6 +16,7 @@ class RBACContext(BaseModel):
     org_id: str
     workspace_id: str
     department_id: str
+    department_ids: List[str] = []
     role_id: str
     is_owner: bool = False
     allowed_role_ids: List[str]

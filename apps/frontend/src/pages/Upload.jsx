@@ -140,7 +140,7 @@ export default function Upload() {
     const files = Array.from(filesList);
     if (!files.length) return;
 
-    if (!selectedDeptId && departments.length > 0) {
+    if (!selectedDeptId) {
       setLoadError("Please select a department before uploading files.");
       return;
     }

@@ -10,6 +10,8 @@ export default function Signup() {
     const { login } = useAuth();
     const navigate = useNavigate();
     const [orgName, setOrgName] = useState("");
+    const [workspaceName, setWorkspaceName] = useState("");
+    const [departmentName, setDepartmentName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [submitting, setSubmitting] = useState(false);
@@ -22,6 +24,8 @@ export default function Signup() {
         try {
             await registerOrganization({
                 organization_name: orgName,
+                workspace_name: workspaceName,
+                department_name: departmentName,
                 admin_email: email,
                 admin_password: password,
             });
@@ -53,6 +57,25 @@ export default function Signup() {
                         placeholder="Your organization"
                         value={orgName}
                         onChange={(e) => setOrgName(e.target.value)}
+                        maxLength={120}
+                        required
+                    />
+                    <Input
+                        id="workspaceName"
+                        label="Default workspace name"
+                        placeholder="Headquarters"
+                        value={workspaceName}
+                        onChange={(e) => setWorkspaceName(e.target.value)}
+                        maxLength={120}
+                        required
+                    />
+                    <Input
+                        id="departmentName"
+                        label="Default department name"
+                        placeholder="General"
+                        value={departmentName}
+                        onChange={(e) => setDepartmentName(e.target.value)}
+                        maxLength={120}
                         required
                     />
                     <Input

@@ -37,12 +37,16 @@ async function listRoles(req, res) {
         name: true,
         permissions: true,
         is_owner: true,
-        _count: { select: { users: true } },
+        _count: { select: { users: true, document_access: true } },
       },
       orderBy: [{ is_owner: 'desc' }, { name: 'asc' }],
     });
     res.json({
-      roles: roles.map(({ _count, ...role }) => ({ ...role, member_count: _count.users })),
+      roles: roles.map(({ _count, ...role }) => ({
+        ...role,
+        member_count: _count.users,
+        document_count: _count.document_access,
+      })),
       permissions: PERMISSIONS,
     });
   } catch (err) {
@@ -124,7 +128,7 @@ async function deleteRole(req, res) {
       select: {
         id: true,
         is_owner: true,
-        _count: { select: { users: true } },
+        _count: { select: { users: true, document_access: true } },
       },
     });
     if (!role) return res.status(404).json({ error: 'Role not found' });
@@ -132,27 +136,16 @@ async function deleteRole(req, res) {
       return res.status(403).json({ error: 'The Owner role cannot be deleted' });
     }
 
-    // Find users who have this role — they will be removed from the organization
-    const usersWithRole = await prisma.user.findMany({
-      where: { role_id: req.params.id },
-      select: { id: true, email: true },
-    });
+    if (role._count.users || role._count.document_access) {
+      return res.status(409).json({
+        error: 'Reassign all users and document permissions before deleting this role',
+        affected_users: role._count.users,
+        affected_documents: role._count.document_access,
+      });
+    }
 
-    await prisma.$transaction([
-      // Delete document access grants for this role
-      prisma.documentRoleAccess.deleteMany({ where: { role_id: req.params.id } }),
-      // Remove users from the organization (delete their accounts)
-      ...usersWithRole.map((u) =>
-        prisma.user.delete({ where: { id: u.id } })
-      ),
-      // Delete the role itself
-      prisma.organizationRole.delete({ where: { id: req.params.id } }),
-    ]);
-
-    res.json({ 
-      deleted: true, 
-      removed_users: usersWithRole.map((u) => u.email) 
-    });
+    await prisma.organizationRole.delete({ where: { id: req.params.id } });
+    res.json({ deleted: true });
   } catch (err) {
     console.error('[roles] delete failed:', err.message);
     res.status(500).json({ error: 'Could not delete role' });
