@@ -1,8 +1,10 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  apiFetch,
+  createDepartment,
   deleteDocument,
+  getDepartments,
   getDocuments,
-  reindexDocument,
   uploadDocument,
 } from "../lib/apiClient";
 import { useAuth } from "../lib/AuthContext";
@@ -10,60 +12,205 @@ import PdfPreview from "../components/documents/PdfPreview";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
-
 export default function Upload() {
   const { user } = useAuth();
   const canUpload = Boolean(user?.is_owner || user?.permissions?.includes("documents:upload"));
   const canDelete = Boolean(user?.is_owner || user?.permissions?.includes("documents:delete"));
+  const canManageDepts = Boolean(
+    user?.is_owner ||
+      user?.permissions?.includes("departments:manage") ||
+      user?.permissions?.includes("workspace:manage")
+  );
+
   const fileInput = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [uploads, setUploads] = useState([]);
-  const [uploading, setUploading] = useState(false);
+  const [uploadQueue, setUploadQueue] = useState([]);
   const [loadError, setLoadError] = useState("");
-  const [deletingIds, setDeletingIds] = useState([]);
   const [deleteError, setDeleteError] = useState("");
+  const [deletingIds, setDeletingIds] = useState([]);
   const [preview, setPreview] = useState(null);
 
-  useEffect(() => {
-    let active = true;
+  // Department selection state
+  const [departments, setDepartments] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [selectedDeptId, setSelectedDeptId] = useState("");
+  const [loadingDepts, setLoadingDepts] = useState(true);
 
-    async function refreshDocuments() {
+  // Create department modal state
+  const [showCreateDeptModal, setShowCreateDeptModal] = useState(false);
+  const [newDeptName, setNewDeptName] = useState("");
+  const [newDeptDesc, setNewDeptDesc] = useState("");
+  const [newDeptWsId, setNewDeptWsId] = useState("");
+  const [creatingDept, setCreatingDept] = useState(false);
+  const [createDeptError, setCreateDeptError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const refreshDocuments = useCallback(async () => {
+    try {
+      const result = await getDocuments();
+      setUploads(
+        result.documents.map((doc) => ({
+          id: doc.id,
+          filename: doc.filename,
+          fileType: doc.file_type,
+          departmentId: doc.department_id,
+          departmentName: doc.department_name || doc.department?.name || "",
+          previewAvailable: doc.preview_available,
+          processing: doc.status === "Processing",
+          status:
+            doc.status === "Processing"
+              ? doc.stage || "Processing..."
+              : doc.status === "Failed" || doc.status === "Timed out"
+              ? `${doc.status}: ${doc.stage}`
+              : doc.status === "Indexed"
+              ? `Indexed (${doc.chunk_count} chunks)`
+              : doc.status,
+          progress: doc.progress,
+        }))
+      );
+      setLoadError(result.warning || "");
+    } catch (err) {
+      setLoadError(err.message || "Failed to load documents");
+    }
+  }, []);
+
+  const loadDepartments = useCallback(async () => {
+    setLoadingDepts(true);
+    try {
+      const [deptRes, wsRes] = await Promise.all([
+        getDepartments().catch(() => ({ departments: [] })),
+        apiFetch("/admin/workspaces").catch(() => ({ workspaces: [] })),
+      ]);
+      const depts = deptRes.departments || [];
+      setDepartments(depts);
+      setWorkspaces(wsRes.workspaces || []);
+
+      if (wsRes.workspaces?.length && !newDeptWsId) {
+        setNewDeptWsId(wsRes.workspaces[0].id);
+      }
+
+      // Default selected department to user's assigned department or first available
+      if (depts.length > 0) {
+        const userDeptExists = depts.some((d) => d.id === user?.department_id);
+        setSelectedDeptId((prev) => prev || (userDeptExists ? user.department_id : depts[0].id));
+      }
+    } catch (err) {
+      console.error("Failed to load departments:", err);
+    } finally {
+      setLoadingDepts(false);
+    }
+  }, [newDeptWsId, user?.department_id]);
+
+  useEffect(() => {
+    loadDepartments();
+    refreshDocuments();
+    const intervalId = window.setInterval(refreshDocuments, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [loadDepartments, refreshDocuments]);
+
+  async function handleCreateDepartment(e) {
+    e.preventDefault();
+    if (!newDeptName.trim()) {
+      setCreateDeptError("Department name is required");
+      return;
+    }
+    setCreatingDept(true);
+    setCreateDeptError("");
+    try {
+      const { department } = await createDepartment({
+        name: newDeptName.trim(),
+        description: newDeptDesc.trim() || undefined,
+        workspace_id: newDeptWsId || undefined,
+      });
+      setDepartments((prev) => [...prev, department]);
+      setSelectedDeptId(department.id);
+      setNotice(`Department "${department.name}" created and selected.`);
+      setNewDeptName("");
+      setNewDeptDesc("");
+      setShowCreateDeptModal(false);
+    } catch (err) {
+      setCreateDeptError(err.message || "Failed to create department");
+    } finally {
+      setCreatingDept(false);
+    }
+  }
+
+  async function handleFiles(filesList) {
+    const files = Array.from(filesList);
+    if (!files.length) return;
+
+    if (!selectedDeptId && departments.length > 0) {
+      setLoadError("Please select a department before uploading files.");
+      return;
+    }
+
+    setLoadError("");
+    setNotice("");
+
+    // Initialize queue items
+    const newItems = files.map((file, idx) => ({
+      key: `${file.name}-${Date.now()}-${idx}`,
+      file,
+      filename: file.name,
+      status: "Uploading...",
+      progress: 0,
+      error: null,
+    }));
+    setUploadQueue((prev) => [...newItems, ...prev]);
+
+    // Process files sequentially
+    for (const item of newItems) {
       try {
-        const result = await getDocuments();
-        if (active) {
-          setUploads(result.documents.map((document) => ({
-            id: document.id,
-            filename: document.filename,
-            fileType: document.file_type,
-            previewAvailable: document.preview_available,
-            processing: document.status === "Processing",
-            status: document.status === "Processing"
-              ? document.stage || "Processing..."
-              : document.status === "Failed" || document.status === "Timed out"
-                ? `${document.status}: ${document.stage}`
-                : document.status === "Indexed"
-                  ? `Indexed (${document.chunk_count} chunks)`
-                  : document.status,
-            progress: document.progress,
-          })));
-          setLoadError(result.warning || "");
-        }
+        await uploadDocument(
+          item.file,
+          (pct) => {
+            setUploadQueue((q) =>
+              q.map((x) => (x.key === item.key ? { ...x, progress: pct } : x))
+            );
+          },
+          undefined,
+          selectedDeptId || undefined
+        );
+        setUploadQueue((q) =>
+          q.map((x) =>
+            x.key === item.key
+              ? { ...x, status: "Uploaded successfully", progress: 100 }
+              : x
+          )
+        );
       } catch (err) {
-        if (active) setLoadError(err.message);
+        setUploadQueue((q) =>
+          q.map((x) =>
+            x.key === item.key
+              ? { ...x, status: "Failed", error: err.message || "Upload failed" }
+              : x
+          )
+        );
       }
     }
 
-    refreshDocuments();
-    const intervalId = window.setInterval(refreshDocuments, 5000);
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, []);
+    if (fileInput.current) fileInput.current.value = "";
+    await refreshDocuments();
+  }
+
+  function handleFileInputChange(event) {
+    if (event.target.files) {
+      handleFiles(event.target.files);
+    }
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    setDragging(false);
+    if (event.dataTransfer.files) {
+      handleFiles(event.dataTransfer.files);
+    }
+  }
 
   async function handleDelete(document) {
     if (!window.confirm(`Delete "${document.filename}"?`)) return;
-    setDeletingIds([...deletingIds, document.id]);
+    setDeletingIds((prev) => [...prev, document.id]);
     setDeleteError("");
     try {
       await deleteDocument(document.id);
@@ -71,101 +218,229 @@ export default function Upload() {
     } catch (err) {
       setDeleteError(err.message || "Delete failed");
     } finally {
-      setDeletingIds(deletingIds.filter((id) => id !== document.id));
+      setDeletingIds((prev) => prev.filter((id) => id !== document.id));
     }
-  }
-
-  async function handleUpload(event) {
-    const files = event.target.files;
-    if (!files.length) return;
-    setUploading(true);
-    setLoadError("");
-    try {
-      const formData = new FormData();
-      formData.append("file", files[0]);
-      await uploadDocument(formData);
-      fileInput.current.value = "";
-    } catch (err) {
-      setLoadError(err.message || "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  function handleDrop(event) {
-    event.preventDefault();
-    setDragging(false);
-    const files = event.dataTransfer.files;
-    if (files.length) handleUpload({ target: { files } });
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6">
+      {/* Header */}
       <div>
         <h1 className="font-display text-xl text-ink">Upload documents</h1>
         <p className="text-sm text-slate">
-          Upload a PDF, DOCX, XLSX, or TXT file. It will be indexed and made
-          searchable for your role.
+          Upload PDF, DOCX, XLSX, or TXT documents. Documents are indexed and linked to your selected department.
         </p>
       </div>
+
+      {notice && (
+        <div
+          role="status"
+          className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-success"
+        >
+          {notice}
+        </div>
+      )}
+      {loadError && (
+        <div
+          role="alert"
+          className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-danger"
+        >
+          {loadError}
+        </div>
+      )}
+
+      {/* Department Selector Section */}
+      <Card className="p-4 bg-paper-raised/40">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label htmlFor="dept-select" className="text-sm font-medium text-ink-soft">
+              Department:
+            </label>
+            {loadingDepts ? (
+              <span className="text-xs text-slate">Loading departments…</span>
+            ) : departments.length === 0 ? (
+              <span className="text-xs text-danger">No departments found.</span>
+            ) : (
+              <select
+                id="dept-select"
+                value={selectedDeptId}
+                onChange={(e) => setSelectedDeptId(e.target.value)}
+                className="rounded-md border border-hairline bg-paper px-3 py-1.5 text-sm font-medium text-ink focus:border-index focus:outline-none"
+              >
+                {departments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>
+                    {dept.name} {dept.workspace?.name ? `(${dept.workspace.name})` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+            {selectedDeptId && departments.length > 0 && (
+              <span className="text-xs text-slate">
+                {departments.find((d) => d.id === selectedDeptId)?.description || ""}
+              </span>
+            )}
+          </div>
+
+          {canManageDepts && (
+            <Button
+              type="button"
+              variant="secondary"
+              className="text-xs py-1 px-3"
+              onClick={() => {
+                setCreateDeptError("");
+                setShowCreateDeptModal(true);
+              }}
+            >
+              + Create department
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {/* Upload Dropzone */}
       <Card className="p-6 border-2 border-dashed border-hairline rounded-xl">
         <label
           className="block cursor-pointer"
-          onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
         >
           <input
             ref={fileInput}
             type="file"
+            multiple
             accept=".pdf,.docx,.xlsx,.txt"
             className="sr-only"
-            onChange={handleUpload}
+            disabled={!canUpload}
+            onChange={handleFileInputChange}
           />
-          <div className="flex flex-col items-center gap-2 pt-8 pb-12">
+          <div className="flex flex-col items-center gap-2 pt-8 pb-10">
             {dragging ? (
-              <p className="text-sm text-index">Drop file here</p>
+              <p className="text-sm font-medium text-index">Drop files here to upload</p>
             ) : (
-              <p className="text-sm text-slate">Click to upload a file</p>
+              <p className="text-sm font-medium text-ink">
+                Click to browse or drop files here
+              </p>
             )}
-            <p className="text-xs text-slate">PDF, DOCX, XLSX, TXT — up to 50 MB</p>
+            <p className="text-xs text-slate">
+              Supports multiple files: PDF, DOCX, XLSX, TXT (up to 50 MB each)
+            </p>
+            {selectedDeptId && departments.length > 0 && (
+              <span className="mt-2 rounded-full bg-paper px-3 py-1 text-xs text-ink-soft border border-hairline">
+                Uploading to: <strong>{departments.find((d) => d.id === selectedDeptId)?.name}</strong>
+              </span>
+            )}
           </div>
         </label>
-        {uploading && (
-          <p className="mt-2 text-sm text-slate">Uploading…</p>
-        )}
-        {loadError && <p role="alert" className="mt-2 text-sm text-danger">{loadError}</p>}
       </Card>
 
-      <div>
-        <h2 className="text-sm font-medium text-ink">Your documents</h2>
-        {uploads.length === 0 && !loadError && (
-          <p className="text-sm text-slate">No documents uploaded yet.</p>
-        )}
-        {uploads.map((upload) => (
-          <div
-            key={upload.id}
-            className="flex items-center justify-between gap-3 px-4 py-3 border-b border-hairline"
-          >
-            <div className="flex items-center gap-3 flex-1">
-              <span className="text-sm text-ink-soft truncate">{upload.filename}</span>
-              <span className="ml-auto text-xs text-slate">{upload.status}</span>
-            </div>
-            {canDelete && (
-              <button
-                type="button"
-                disabled={deletingIds.includes(upload.id)}
-                className="text-xs font-medium text-danger hover:underline"
-                onClick={() => handleDelete(upload)}
-              >
-                {deletingIds.includes(upload.id) ? "Deleting…" : "Delete"}
-              </button>
-            )}
+      {/* Upload Queue Progress */}
+      {uploadQueue.length > 0 && (
+        <Card className="divide-y divide-hairline overflow-hidden">
+          <div className="flex items-center justify-between border-b border-hairline px-4 py-2.5 bg-paper-raised/40">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-soft">
+              Upload queue
+            </h3>
+            <button
+              type="button"
+              onClick={() => setUploadQueue([])}
+              className="text-xs text-slate hover:text-ink"
+            >
+              Clear
+            </button>
           </div>
-        ))}
+          {uploadQueue.map((item) => (
+            <div key={item.key} className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs">
+              <span className="truncate max-w-sm font-medium text-ink">{item.filename}</span>
+              <div className="flex items-center gap-3">
+                {item.error ? (
+                  <span className="text-danger">{item.error}</span>
+                ) : item.progress === 100 ? (
+                  <span className="text-success font-medium">Uploaded</span>
+                ) : (
+                  <span className="text-slate">{item.progress}% ({item.status})</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {/* Documents List */}
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-medium text-ink">Organization documents ({uploads.length})</h2>
+        </div>
+
+        {uploads.length === 0 && !loadError ? (
+          <Card className="p-8 text-center text-sm text-slate">
+            No documents uploaded yet. Upload a document to get started.
+          </Card>
+        ) : (
+          <Card className="divide-y divide-hairline overflow-hidden">
+            {uploads.map((upload) => (
+              <div
+                key={upload.id}
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-paper-raised/30"
+              >
+                <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-48">
+                  <span className="text-sm font-medium text-ink truncate">
+                    {upload.filename}
+                  </span>
+                  {upload.departmentName && (
+                    <span className="rounded bg-paper-raised px-2 py-0.5 text-[11px] font-medium text-slate border border-hairline">
+                      {upload.departmentName}
+                    </span>
+                  )}
+                  <span className="rounded bg-index-soft px-1.5 py-0.2 text-[10px] uppercase font-bold text-index">
+                    {upload.fileType}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <span className="text-xs text-slate">{upload.status}</span>
+                  {upload.previewAvailable && (
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-index hover:underline"
+                      onClick={() =>
+                        setPreview({
+                          documentId: upload.id,
+                          filename: upload.filename,
+                          page: 1,
+                        })
+                      }
+                    >
+                      Preview
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      type="button"
+                      disabled={deletingIds.includes(upload.id)}
+                      className="text-xs font-medium text-danger hover:underline disabled:opacity-50"
+                      onClick={() => handleDelete(upload)}
+                    >
+                      {deletingIds.includes(upload.id) ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </Card>
+        )}
       </div>
 
-      {deleteError && <p role="alert" className="mt-2 text-sm text-danger">{deleteError}</p>}
+      {deleteError && (
+        <p role="alert" className="text-sm text-danger">
+          {deleteError}
+        </p>
+      )}
+
+      {/* PDF Preview Modal */}
       {preview && (
         <PdfPreview
           documentId={preview.documentId}
@@ -174,7 +449,84 @@ export default function Upload() {
           onClose={() => setPreview(null)}
         />
       )}
+
+      {/* Create Department Modal */}
+      {showCreateDeptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="flex w-full max-w-md flex-col gap-4 p-6 shadow-xl">
+            <div className="border-b border-hairline pb-2">
+              <h2 className="font-display text-lg text-ink">Create new department</h2>
+              <p className="text-xs text-slate">
+                Add a department to organize documents and users.
+              </p>
+            </div>
+
+            <form onSubmit={handleCreateDepartment} className="flex flex-col gap-4">
+              {workspaces.length > 1 && (
+                <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                  Workspace
+                  <select
+                    value={newDeptWsId}
+                    onChange={(e) => setNewDeptWsId(e.target.value)}
+                    className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none"
+                  >
+                    {workspaces.map((ws) => (
+                      <option key={ws.id} value={ws.id}>
+                        {ws.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                Department name
+                <input
+                  required
+                  maxLength={80}
+                  value={newDeptName}
+                  onChange={(e) => setNewDeptName(e.target.value)}
+                  placeholder="e.g. Legal, Engineering, Marketing"
+                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none"
+                  autoFocus
+                />
+              </label>
+
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                Description (optional)
+                <textarea
+                  rows={2}
+                  maxLength={240}
+                  value={newDeptDesc}
+                  onChange={(e) => setNewDeptDesc(e.target.value)}
+                  placeholder="Brief summary of this department's function..."
+                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none resize-none"
+                />
+              </label>
+
+              {createDeptError && (
+                <p role="alert" className="text-xs text-danger">
+                  {createDeptError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={creatingDept}
+                  onClick={() => setShowCreateDeptModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={creatingDept || !newDeptName.trim()}>
+                  {creatingDept ? "Creating…" : "Create & select"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
-

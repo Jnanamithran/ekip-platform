@@ -20,6 +20,11 @@ export const NAV_ITEMS = [
     permissions: ["roles:manage"],
   },
   {
+    label: "Departments",
+    path: "/app/departments",
+    permissions: ["departments:manage", "workspace:manage"],
+  },
+  {
     label: "Integrations",
     path: "/app/integrations",
     permissions: ["drive:connect", "drive:import"],

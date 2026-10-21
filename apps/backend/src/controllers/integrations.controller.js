@@ -245,12 +245,44 @@ async function listFolderFiles(drive, folderId, foundFiles, visitedFolders) {
 }
 
 // POST /integrations/google/import
-// Body: { files: [{ file_id, is_folder, allowed_role_ids: [...] }] }
+// Body: { files: [{ file_id, is_folder, allowed_role_ids: [...], department_id?: string }], department_id?: string, folder_mappings?: { [folderId]: departmentId } }
 async function importFiles(req, res) {
-  const { files } = req.body || {};
+  const { files, department_id, folder_mappings } = req.body || {};
 
   if (!Array.isArray(files) || !files.length || files.length > MAX_FILES_PER_IMPORT) {
     return res.status(400).json({ error: `Send between 1 and ${MAX_FILES_PER_IMPORT} files` });
+  }
+
+  // Validate any department IDs referenced
+  const deptIdsToCheck = new Set();
+  if (typeof department_id === 'string' && department_id.trim()) {
+    deptIdsToCheck.add(department_id.trim());
+  }
+  if (folder_mappings && typeof folder_mappings === 'object') {
+    Object.values(folder_mappings).forEach((id) => {
+      if (typeof id === 'string' && id.trim()) deptIdsToCheck.add(id.trim());
+    });
+  }
+  for (const f of files) {
+    if (f && typeof f.department_id === 'string' && f.department_id.trim()) {
+      deptIdsToCheck.add(f.department_id.trim());
+    }
+  }
+
+  if (deptIdsToCheck.size > 0) {
+    const validDepts = await prisma.department.findMany({
+      where: {
+        id: { in: Array.from(deptIdsToCheck) },
+        workspace: { org_id: req.user.org_id },
+      },
+      select: { id: true },
+    });
+    const validIds = new Set(validDepts.map((d) => d.id));
+    for (const id of deptIdsToCheck) {
+      if (!validIds.has(id)) {
+        return res.status(400).json({ error: `Invalid department specified: ${id}` });
+      }
+    }
   }
 
   const validatedFiles = [];
@@ -269,7 +301,16 @@ async function importFiles(req, res) {
       req.user
     );
     if (access.error) return res.status(400).json({ error: access.error });
-    validatedFiles.push({ ...f, allowed_role_ids: access.roleIds });
+    const targetDeptId = (typeof f.department_id === 'string' && f.department_id.trim()) ||
+      (folder_mappings && typeof folder_mappings[f.file_id] === 'string' && folder_mappings[f.file_id].trim()) ||
+      (typeof department_id === 'string' && department_id.trim()) ||
+      undefined;
+
+    validatedFiles.push({
+      ...f,
+      allowed_role_ids: access.roleIds,
+      department_id: targetDeptId,
+    });
   }
 
   try {
@@ -301,13 +342,18 @@ async function importFiles(req, res) {
           ...folderFiles.map((file) => ({
             file,
             allowed_role_ids: selection.allowed_role_ids,
+            department_id: selection.department_id,
           }))
         );
       } else {
         if (!MIME_TO_EXT[metadata.mimeType]) {
           return res.status(400).json({ error: `Unsupported file type: ${metadata.name}` });
         }
-        selectionsToImport.push({ file: metadata, allowed_role_ids: selection.allowed_role_ids });
+        selectionsToImport.push({
+          file: metadata,
+          allowed_role_ids: selection.allowed_role_ids,
+          department_id: selection.department_id,
+        });
       }
       if (selectionsToImport.length > MAX_FILES_PER_IMPORT) {
         return res.status(400).json({
@@ -339,6 +385,7 @@ async function importFiles(req, res) {
           filename: path.parse(meta.name).name + ext,
           mimetype: meta.mimeType,
           allowedRoleIds: selection.allowed_role_ids,
+          departmentId: selection.department_id,
         });
 
         results.push(

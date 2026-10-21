@@ -17,7 +17,10 @@ const {
   updateWorkspace,
   createDepartment,
   listDepartments,
-  queryAnalytics
+  getDepartment,
+  updateDepartment,
+  deleteDepartment,
+  queryAnalytics,
 } = require('../controllers/admin.controller');
 
 const router = express.Router();
@@ -36,10 +39,29 @@ router.get('/workspaces', requirePermission('workspace:manage'), listWorkspaces)
 router.get('/workspaces/:workspaceId', requirePermission('workspace:manage'), getWorkspaceDashboard);
 router.patch('/workspaces/:workspaceId', requirePermission('workspace:manage'), updateWorkspace);
 
-router.post('/departments', requirePermission('workspace:manage'), createDepartment);
+router.post(
+  '/departments',
+  requireAnyPermission('departments:manage', 'workspace:manage'),
+  createDepartment
+);
+router.get(
+  '/departments/:id',
+  requireAnyPermission('departments:manage', 'workspace:manage', 'users:manage'),
+  getDepartment
+);
+router.patch(
+  '/departments/:id',
+  requireAnyPermission('departments:manage', 'workspace:manage'),
+  updateDepartment
+);
+router.delete(
+  '/departments/:id',
+  requireAnyPermission('departments:manage', 'workspace:manage'),
+  deleteDepartment
+);
 router.get(
   '/departments',
-  requireAnyPermission('workspace:manage', 'users:manage'),
+  requireAnyPermission('departments:manage', 'workspace:manage', 'users:manage'),
   listDepartments
 );
 

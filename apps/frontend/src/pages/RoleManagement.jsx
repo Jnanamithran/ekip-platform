@@ -1,4 +1,4 @@
-﻿import { useAuth } from "../lib/AuthContext";
+import { useAuth } from "../lib/AuthContext";
 import { useCallback, useEffect, useState } from "react";
 import {
   createOrganizationRole,
@@ -6,15 +6,92 @@ import {
   getOrganizationRoles,
   updateOrganizationRole,
 } from "../lib/apiClient";
+import {
+  getDepartments,
+  createDepartment,
+  updateDepartment,
+  deleteDepartment,
+} from "../lib/apiClient";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
 const emptyDraft = { id: null, name: "", permissions: [] };
 
-function permissionLabel(permission) {
-  return permission.split(":").map((part) =>
-    part.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
-  ).join(" — ");
+const PERMISSION_DETAILS = {
+  "documents:search": {
+    label: "Search documents",
+    group: "Documents",
+    description: "Search and query indexed documents across allowed departments",
+  },
+  "documents:upload": {
+    label: "Upload documents",
+    group: "Documents",
+    description: "Upload new files to be processed and indexed",
+  },
+  "documents:delete": {
+    label: "Delete documents",
+    group: "Documents",
+    description: "Permanently delete documents and remove their embeddings",
+  },
+  "documents:reindex": {
+    label: "Reindex documents",
+    group: "Documents",
+    description: "Re-run text/visual pipeline on existing documents",
+  },
+  "documents:manage_access": {
+    label: "Manage document access",
+    group: "Documents",
+    description: "Control role-based document access rules",
+  },
+  "drive:connect": {
+    label: "Connect Google Drive",
+    group: "Integrations",
+    description: "Authenticate and connect Google Drive accounts",
+  },
+  "drive:import": {
+    label: "Import from Drive",
+    group: "Integrations",
+    description: "Import files and folders directly from Google Drive",
+  },
+  "users:manage": {
+    label: "Manage users",
+    group: "Administration",
+    description: "Create, edit, deactivate users, and reset user passwords",
+  },
+  "roles:manage": {
+    label: "Manage roles",
+    group: "Administration",
+    description: "Create and update custom roles and permission configurations",
+  },
+  "departments:manage": {
+    label: "Manage departments",
+    group: "Administration",
+    description: "Create, rename, and delete workspace departments",
+  },
+  "workspace:manage": {
+    label: "Manage workspace",
+    group: "Administration",
+    description: "Manage organization workspace profile and overall settings",
+  },
+  "analytics:view": {
+    label: "View analytics",
+    group: "Analytics",
+    description: "View search queries, user trends, and document analytics",
+  },
+};
+
+function getPermissionMeta(permission) {
+  if (PERMISSION_DETAILS[permission]) {
+    return PERMISSION_DETAILS[permission];
+  }
+  return {
+    label: permission
+      .split(":")
+      .map((p) => p.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase()))
+      .join(" — "),
+    group: "Other",
+    description: "",
+  };
 }
 
 export default function RoleManagement() {
@@ -30,14 +107,26 @@ export default function RoleManagement() {
   const [deletingRole, setDeletingRole] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
+  // Department management state
+  const [departments, setDepartments] = useState([]);
+  const [deptDraft, setDeptDraft] = useState({ id: null, name: "" });
+  const [deptSaving, setDeptSaving] = useState(false);
+  const [deptError, setDeptError] = useState("");
+  const [deptNotice, setDeptNotice] = useState("");
+  const [deletingDept, setDeletingDept] = useState(null);
+
   const load = useCallback(async () => {
     try {
-      const result = await getOrganizationRoles();
-      setRoles(result.roles);
-      setPermissions(result.permissions);
+      const [result, deptResult] = await Promise.all([
+        getOrganizationRoles(),
+        getDepartments().catch(() => ({ departments: [] })),
+      ]);
+      setRoles(result.roles || []);
+      setPermissions(result.permissions || []);
+      setDepartments(deptResult.departments || []);
       setError("");
     } catch (loadError) {
-      setError(loadError.message);
+      setError(loadError.message || "Failed to load roles");
     } finally {
       setLoading(false);
     }
@@ -56,6 +145,16 @@ export default function RoleManagement() {
     }));
   }
 
+  function toggleAllInGroup(groupPermissions, shouldSelect) {
+    setDraft((current) => {
+      const remaining = current.permissions.filter((p) => !groupPermissions.includes(p));
+      return {
+        ...current,
+        permissions: shouldSelect ? [...remaining, ...groupPermissions] : remaining,
+      };
+    });
+  }
+
   async function save(event) {
     event.preventDefault();
     setSaving(true);
@@ -67,13 +166,13 @@ export default function RoleManagement() {
           name: draft.name,
           permissions: draft.permissions,
         });
-        setNotice("Role updated.");
+        setNotice(`Role "${draft.name}" updated successfully.`);
       } else {
         await createOrganizationRole({
           name: draft.name,
           permissions: draft.permissions,
         });
-        setNotice("Role created.");
+        setNotice(`Role "${draft.name}" created successfully.`);
       }
       setDraft(emptyDraft);
       await load();
@@ -102,9 +201,9 @@ export default function RoleManagement() {
       const removed = result.removed_users ?? [];
       setNotice(
         `Role "${deleteConfirm.name}" deleted.` +
-        (removed.length
-          ? ` ${removed.length} user${removed.length === 1 ? "" : "s"} with this role were removed from the organization: ${removed.join(", ")}.`
-          : "")
+          (removed.length
+            ? ` ${removed.length} user${removed.length === 1 ? "" : "s"} with this role were removed: ${removed.join(", ")}.`
+            : "")
       );
       setDeleteConfirm(null);
       await load();
@@ -119,129 +218,446 @@ export default function RoleManagement() {
     setDeleteConfirm(null);
   }
 
+  // Department management functions
+  async function saveDepartment(event) {
+    event.preventDefault();
+    if (!deptDraft.name.trim()) {
+      setDeptError("Department name is required");
+      return;
+    }
+    setDeptSaving(true);
+    setDeptError("");
+    setDeptNotice("");
+    try {
+      if (deptDraft.id) {
+        await updateDepartment(deptDraft.id, { name: deptDraft.name.trim() });
+        setDeptNotice(`Department "${deptDraft.name.trim()}" updated successfully.`);
+      } else {
+        await createDepartment({ name: deptDraft.name.trim() });
+        setDeptNotice(`Department "${deptDraft.name.trim()}" created successfully.`);
+      }
+      setDeptDraft({ id: null, name: "" });
+      await load();
+    } catch (saveError) {
+      setDeptError(saveError.message || "Failed to save department");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
+
+  function startEditDepartment(dept) {
+    setDeptDraft({ id: dept.id, name: dept.name });
+    setDeptError("");
+    setDeptNotice("");
+  }
+
+  function cancelEditDepartment() {
+    setDeptDraft({ id: null, name: "" });
+    setDeptError("");
+    setDeptNotice("");
+  }
+
+  async function confirmDeleteDepartment() {
+    if (!deletingDept) return;
+    setDeptSaving(true);
+    setDeptError("");
+    setDeptNotice("");
+    try {
+      await deleteDepartment(deletingDept.id);
+      setDeptNotice(`Department "${deletingDept.name}" deleted.`);
+      setDeletingDept(null);
+      await load();
+    } catch (deleteError) {
+      setDeptError(deleteError.message || "Failed to delete department");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
+  const groupedPermissions = permissions.reduce((acc, permission) => {
+    const meta = getPermissionMeta(permission);
+    if (!acc[meta.group]) acc[meta.group] = [];
+    acc[meta.group].push({ permission, ...meta });
+    return acc;
+  }, {});
+
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6">
+    <div className="mx-auto flex max-w-5xl flex-col gap-6">
+      {/* Header */}
       <div>
-        <h1 className="font-display text-xl text-ink">Organization roles</h1>
+        <h1 className="font-display text-xl text-ink">Organization roles & permissions</h1>
         <p className="text-sm text-slate">
-          Create roles for your organization and choose what each role can do. The Owner role is protected — only the Owner can delete roles.
+          Create roles and configure exactly what permissions each role has — including managing departments, documents, users, and integrations.
         </p>
       </div>
-      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-      {notice && <p role="status" className="text-sm text-success">{notice}</p>}
-      <Card className="p-5">
-        <form onSubmit={save} className="flex flex-col gap-4">
-          <h2 className="text-sm font-medium text-ink">{draft.id ? "Edit role" : "Create a role"}</h2>
-          <label className="flex flex-col gap-1 text-sm text-ink-soft">
+
+      {/* Global Alerts */}
+      {error && (
+        <div
+          role="alert"
+          className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-danger"
+        >
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div
+          role="status"
+          className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-success"
+        >
+          {notice}
+        </div>
+      )}
+
+      {/* Create / Edit Role Card */}
+      <Card className="p-6">
+        <form onSubmit={save} className="flex flex-col gap-5">
+          <div className="border-b border-hairline pb-2">
+            <h2 className="font-medium text-ink">
+              {draft.id ? `Edit role: ${draft.name}` : "Create a new role"}
+            </h2>
+            <p className="text-xs text-slate">
+              Define the role name and select the permissions granted to members with this role.
+            </p>
+          </div>
+
+          <label className="flex max-w-md flex-col gap-1 text-sm text-ink-soft">
             Role name
             <input
               required
               maxLength={48}
               value={draft.name}
               onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              className="rounded-md border border-hairline bg-white px-3 py-2"
+              placeholder="e.g. Department Lead, Research Associate, Auditor"
+              className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink placeholder:text-slate-light focus:border-index focus:outline-none"
             />
           </label>
-          <fieldset className="grid gap-2 sm:grid-cols-2">
-            <legend className="mb-2 text-sm font-medium text-ink-soft">Permissions</legend>
-            {permissions.map((permission) => (
-              <label key={permission} className="flex items-center gap-2 text-sm text-ink-soft">
-                <input
-                  type="checkbox"
-                  checked={draft.permissions.includes(permission)}
-                  onChange={() => togglePermission(permission)}
-                />
-                {permissionLabel(permission)}
-              </label>
-            ))}
-          </fieldset>
-          <div className="flex gap-3">
+
+          {/* Grouped Permissions */}
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-ink">Role permissions</span>
+              <span className="text-xs text-slate">
+                {draft.permissions.length} of {permissions.length} permissions enabled
+              </span>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {Object.entries(groupedPermissions).map(([groupName, items]) => {
+                const allSelected = items.every((i) => draft.permissions.includes(i.permission));
+                const someSelected = items.some((i) => draft.permissions.includes(i.permission));
+
+                return (
+                  <div
+                    key={groupName}
+                    className="rounded-lg border border-hairline bg-paper-raised/40 p-4"
+                  >
+                    <div className="mb-3 flex items-center justify-between border-b border-hairline pb-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-ink-soft">
+                        {groupName}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          toggleAllInGroup(
+                            items.map((i) => i.permission),
+                            !allSelected
+                          )
+                        }
+                        className="text-[11px] font-medium text-index hover:underline"
+                      >
+                        {allSelected ? "Deselect all" : "Select all"}
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col gap-2.5">
+                      {items.map(({ permission, label, description }) => {
+                        const isChecked = draft.permissions.includes(permission);
+                        return (
+                          <label
+                            key={permission}
+                            className={`flex cursor-pointer items-start gap-2.5 rounded-md p-1.5 transition-colors hover:bg-paper-raised ${
+                              isChecked ? "bg-paper-raised/60" : ""
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => togglePermission(permission)}
+                              className="mt-0.5 h-4 w-4 rounded accent-index"
+                            />
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-ink">
+                                {label}
+                              </span>
+                              {description && (
+                                <span className="text-[11px] leading-tight text-slate">
+                                  {description}
+                                </span>
+                              )}
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-3">
             <Button type="submit" disabled={saving || !draft.name.trim()}>
-              {saving ? "Saving…" : draft.id ? "Save changes" : "Create role"}
+              {saving ? "Saving…" : draft.id ? "Save role changes" : "Create role"}
             </Button>
             {draft.id && (
-              <button type="button" className="text-sm text-slate" onClick={() => setDraft(emptyDraft)}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setDraft(emptyDraft)}
+              >
                 Cancel
-              </button>
+              </Button>
             )}
           </div>
         </form>
       </Card>
-      <Card className="divide-y divide-hairline">
+
+      {/* Roles List Card */}
+      <Card className="divide-y divide-hairline overflow-hidden">
+        <div className="border-b border-hairline px-5 py-3">
+          <h2 className="text-sm font-medium text-ink">Existing organization roles</h2>
+        </div>
+
         {loading ? (
-          <p className="p-4 text-sm text-slate">Loading roles…</p>
-        ) : roles.map((role) => (
-          <div key={role.id} className="flex flex-wrap items-start gap-3 p-4">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-medium text-ink">{role.name}</h2>
-                {role.is_owner && <span className="text-xs text-index">Protected Owner</span>}
+          <p className="p-6 text-sm text-slate">Loading roles…</p>
+        ) : roles.length === 0 ? (
+          <p className="p-6 text-sm text-slate">No roles defined yet.</p>
+        ) : (
+          roles.map((role) => (
+            <div
+              key={role.id}
+              className="flex flex-wrap items-start justify-between gap-4 p-5 transition-colors hover:bg-paper-raised/30"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-sm text-ink">{role.name}</h3>
+                  {role.is_owner && (
+                    <span className="rounded bg-role-admin/10 px-2 py-0.5 text-xs font-medium text-role-admin">
+                      Protected Owner
+                    </span>
+                  )}
+                </div>
+
+                <p className="mt-1 text-xs text-slate">
+                  {role.member_count} member{role.member_count === 1 ? "" : "s"}
+                </p>
+
+                {/* Permissions Badges */}
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {role.permissions.length === 0 ? (
+                    <span className="text-xs italic text-slate-light">
+                      No permissions granted
+                    </span>
+                  ) : (
+                    role.permissions.map((perm) => {
+                      const meta = getPermissionMeta(perm);
+                      const isDeptManage = perm === "departments:manage";
+                      return (
+                        <span
+                          key={perm}
+                          className={`rounded px-2 py-0.5 text-[11px] font-medium ${
+                            isDeptManage
+                              ? "bg-index/10 text-index border border-index/20"
+                              : "bg-paper-raised text-ink-soft border border-hairline"
+                          }`}
+                          title={meta.description || meta.label}
+                        >
+                          {meta.label}
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
               </div>
-              <p className="mt-1 text-xs text-slate">
-                {role.member_count} member{role.member_count === 1 ? "" : "s"} ·{" "}
-                {role.permissions.length ? role.permissions.map(permissionLabel).join(", ") : "No permissions"}
-              </p>
+
+              {!role.is_owner && (
+                <div className="flex items-center gap-2 pt-1">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-3 py-1 text-xs"
+                    onClick={() => {
+                      setDraft({
+                        id: role.id,
+                        name: role.name,
+                        permissions: role.permissions,
+                      });
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className={`px-3 py-1 text-xs hover:text-danger ${
+                      !isOrgOwner ? "opacity-50 cursor-not-allowed" : ""
+                    }`}
+                    onClick={() => requestDelete(role)}
+                    disabled={!isOrgOwner}
+                  >
+                    {deletingRole === role.id ? "Deleting…" : "Delete"}
+                  </Button>
+                  {!isOrgOwner && (
+                    <span className="text-[11px] text-slate-light">Owner only</span>
+                  )}
+                </div>
+              )}
             </div>
-            {!role.is_owner && (
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  className="text-xs font-medium text-index hover:underline"
-                  onClick={() => setDraft({
-                    id: role.id,
-                    name: role.name,
-                    permissions: role.permissions,
-                  })}
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  className={`text-xs font-medium text-danger hover:underline ${!isOrgOwner ? "opacity-50 cursor-not-allowed" : ""}`}
-                  onClick={() => requestDelete(role)}
-                  disabled={!isOrgOwner}
-                >
-                  {deletingRole === role.id ? "Deleting…" : "Delete"}
-                </button>
-                {!isOrgOwner && (
-                  <span className="text-xs text-slate">Owner only</span>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+          ))
+        )}
       </Card>
 
+      {/* Department Management Section */}
+      <Card className="p-6">
+        <div className="border-b border-hairline pb-2 mb-4">
+          <h2 className="font-medium text-ink">Department management</h2>
+          <p className="text-xs text-slate">
+            Create and manage workspace departments. Departments group users and documents.
+          </p>
+        </div>
+
+        {deptError && (
+          <div role="alert" className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-danger mb-4">
+            {deptError}
+          </div>
+        )}
+        {deptNotice && (
+          <div role="status" className="rounded-md border border-hairline bg-paper-raised px-4 py-3 text-sm text-success mb-4">
+            {deptNotice}
+          </div>
+        )}
+
+        <form onSubmit={saveDepartment} className="flex flex-col gap-4 mb-6">
+          <label className="flex max-w-md flex-col gap-1 text-sm text-ink-soft">
+            {deptDraft.id ? "Edit department name" : "New department name"}
+            <input
+              required
+              maxLength={64}
+              value={deptDraft.name}
+              onChange={(event) => setDeptDraft({ ...deptDraft, name: event.target.value })}
+              placeholder="e.g. Engineering, HR, Sales"
+              className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink placeholder:text-slate-light focus:border-index focus:outline-none"
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={deptSaving || !deptDraft.name.trim()}>
+              {deptSaving ? "Saving…" : deptDraft.id ? "Save department" : "Create department"}
+            </Button>
+            {deptDraft.id && (
+              <Button type="button" variant="secondary" onClick={cancelEditDepartment}>
+                Cancel
+              </Button>
+            )}
+          </div>
+        </form>
+
+        {departments.length === 0 ? (
+          <p className="text-sm text-slate">No departments defined yet.</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {departments.map((dept) => (
+              <div key={dept.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hairline bg-paper-raised/40 p-3">
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-medium text-sm text-ink">{dept.name}</h3>
+                  <p className="text-xs text-slate">
+                    {dept._count?.users ?? 0} member{(dept._count?.users ?? 0) === 1 ? "" : "s"} ·{" "}
+                    {dept._count?.documents ?? 0} document{(dept._count?.documents ?? 0) === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEditDepartment(dept)}>
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="px-3 py-1 text-xs hover:text-danger"
+                    onClick={() => setDeletingDept(dept)}
+                    disabled={(dept._count?.users ?? 0) > 0 || (dept._count?.documents ?? 0) > 0}
+                    title={(dept._count?.users ?? 0) > 0 || (dept._count?.documents ?? 0) > 0 ? "Department has members or documents attached" : "Delete department"}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Delete Department Confirmation Modal */}
+      {deletingDept && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="flex w-full max-w-sm flex-col gap-4 p-6 shadow-xl">
+            <h2 className="font-display text-lg text-ink">Delete department?</h2>
+            <p className="text-sm text-ink-soft">
+              Are you sure you want to delete the department <strong>{deletingDept.name}</strong>?
+            </p>
+            {(deletingDept._count?.users ?? 0) > 0 || (deletingDept._count?.documents ?? 0) > 0 ? (
+              <div className="rounded-md border border-hairline bg-paper-raised p-3 text-xs text-danger">
+                <strong>Cannot delete:</strong> This department has {deletingDept._count?.users ?? 0} member(s) and{" "}
+                {deletingDept._count?.documents ?? 0} document(s). Reassign them first.
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" variant="secondary" onClick={() => setDeletingDept(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={confirmDeleteDepartment}
+                disabled={
+                  deptSaving ||
+                  (deletingDept._count?.users ?? 0) > 0 ||
+                  (deletingDept._count?.documents ?? 0) > 0
+                }
+              >
+                {deptSaving ? "Deleting…" : "Delete department"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="flex w-full max-w-sm flex-col gap-4 p-6">
+          <Card className="flex w-full max-w-sm flex-col gap-4 p-6 shadow-xl">
             <h2 className="font-display text-lg text-ink">Delete role?</h2>
             <p className="text-sm text-ink-soft">
-              Are you sure you want to delete the role <strong>{deleteConfirm.name}</strong>?
+              Are you sure you want to delete the role{" "}
+              <strong>{deleteConfirm.name}</strong>?
             </p>
             {deleteConfirm.member_count > 0 && (
-              <div className="bg-index-soft/50 border border-index-soft rounded p-3 mb-3">
-                <p className="text-sm text-danger">
-                  <strong>Warning:</strong> {deleteConfirm.member_count} user{deleteConfirm.member_count === 1 ? "" : "s"} currently have this role. They will be <strong>removed from the organization</strong>.
-                </p>
+              <div className="rounded-md border border-hairline bg-paper-raised p-3 text-xs text-danger">
+                <strong>Warning:</strong> {deleteConfirm.member_count} user
+                {deleteConfirm.member_count === 1 ? "" : "s"} currently have this role. They will be <strong>removed from the organization</strong>.
               </div>
             )}
-            <div className="flex gap-3 justify-end">
-              <button
-                type="button"
-                className="text-sm text-slate hover:underline"
-                onClick={cancelDelete}
-              >
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" variant="secondary" onClick={cancelDelete}>
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="text-sm font-medium text-danger"
+                variant="danger"
                 onClick={confirmDelete}
                 disabled={deletingRole === deleteConfirm.id}
               >
                 {deletingRole === deleteConfirm.id ? "Deleting…" : "Delete role"}
-              </button>
+              </Button>
             </div>
           </Card>
         </div>
