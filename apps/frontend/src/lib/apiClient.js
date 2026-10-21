@@ -212,6 +212,23 @@ export async function getPdfPreview(documentId) {
     return response.blob();
 }
 
+export async function getExtractedDocumentPreview(documentId) {
+    const path = '/ai/documents/' + encodeURIComponent(documentId) + '/preview';
+    const request = (token) => fetch(API_URL + path, {
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+
+    let response = await request(accessToken);
+    if (response.status === 401) {
+        response = await request(await refreshAccessToken());
+    }
+    const data = await parseJsonSafe(response);
+    if (!response.ok) {
+        throw new Error(data?.error ?? 'Could not load document preview (' + response.status + ')');
+    }
+    return data;
+}
+
 /**
  * Fetch the rendered JPEG for a visual (ColPali) citation page.
  * Requires a valid JWT. Page numbers are 1-based.
@@ -321,10 +338,10 @@ export async function reindexDocument(id) {
     });
 }
 
-export async function updateDocumentAccess(id, allowedRoleIds) {
+export async function updateDocumentAccess(id, access) {
     return apiFetch('/ai/documents/' + encodeURIComponent(id) + '/access', {
         method: 'PATCH',
-        body: JSON.stringify({ allowed_role_ids: allowedRoleIds }),
+        body: JSON.stringify(access),
     });
 }
 // ---------------------------------------------------------------------------

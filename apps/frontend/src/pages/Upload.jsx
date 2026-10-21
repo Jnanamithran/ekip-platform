@@ -5,10 +5,13 @@ import {
   deleteDocument,
   getDepartments,
   getDocuments,
+  getOrganizationRoles,
+  reindexDocument,
+  updateDocumentAccess,
   uploadDocument,
 } from "../lib/apiClient";
 import { useAuth } from "../lib/AuthContext";
-import PdfPreview from "../components/documents/PdfPreview";
+import DocumentPreview from "../components/documents/DocumentPreview";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
@@ -16,6 +19,10 @@ export default function Upload() {
   const { user } = useAuth();
   const canUpload = Boolean(user?.is_owner || user?.permissions?.includes("documents:upload"));
   const canDelete = Boolean(user?.is_owner || user?.permissions?.includes("documents:delete"));
+  const canReindex = Boolean(user?.is_owner || user?.permissions?.includes("documents:reindex"));
+  const canManageAccess = Boolean(
+    user?.is_owner || user?.permissions?.includes("documents:manage_access")
+  );
   const canManageDepts = Boolean(
     user?.is_owner ||
       user?.permissions?.includes("departments:manage") ||
@@ -24,12 +31,26 @@ export default function Upload() {
 
   const fileInput = useRef(null);
   const [dragging, setDragging] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploads, setUploads] = useState([]);
   const [uploadQueue, setUploadQueue] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deletingIds, setDeletingIds] = useState([]);
+  const [reindexingIds, setReindexingIds] = useState([]);
   const [preview, setPreview] = useState(null);
+  const [roles, setRoles] = useState([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [rolesError, setRolesError] = useState("");
+  const [selectedRoleIds, setSelectedRoleIds] = useState(
+    user?.role_id ? [user.role_id] : []
+  );
+  const [accessEdit, setAccessEdit] = useState(null);
+  const [accessRoleIds, setAccessRoleIds] = useState([]);
+  const [accessDepartmentId, setAccessDepartmentId] = useState("");
+  const [accessSaving, setAccessSaving] = useState(false);
+  const [accessError, setAccessError] = useState("");
 
   // Department selection state
   const [departments, setDepartments] = useState([]);
@@ -45,6 +66,7 @@ export default function Upload() {
   const [creatingDept, setCreatingDept] = useState(false);
   const [createDeptError, setCreateDeptError] = useState("");
   const [notice, setNotice] = useState("");
+  const [reindexError, setReindexError] = useState("");
 
   const refreshDocuments = useCallback(async () => {
     try {
@@ -56,6 +78,7 @@ export default function Upload() {
           fileType: doc.file_type,
           departmentId: doc.department_id,
           departmentName: doc.department_name || doc.department?.name || "",
+          allowedRoleIds: doc.allowed_role_ids || [],
           previewAvailable: doc.preview_available,
           processing: doc.status === "Processing",
           status:
@@ -74,6 +97,42 @@ export default function Upload() {
       setLoadError(err.message || "Failed to load documents");
     }
   }, []);
+
+  useEffect(() => {
+    if (!canManageAccess) return;
+
+    let active = true;
+    setRolesLoading(true);
+    setRolesError("");
+    getOrganizationRoles()
+      .then((result) => {
+        if (!active) return;
+        const availableRoles = result.roles || [];
+        setRoles(availableRoles);
+        if (!availableRoles.length) {
+          setRolesError("No organization roles are available. Ask an administrator to configure roles before uploading.");
+          setSelectedRoleIds([]);
+          return;
+        }
+        setSelectedRoleIds((current) => {
+          const stillValid = current.filter((id) => availableRoles.some((role) => role.id === id));
+          if (stillValid.length) return stillValid;
+          return user?.role_id && availableRoles.some((role) => role.id === user.role_id)
+            ? [user.role_id]
+            : [];
+        });
+      })
+      .catch((error) => {
+        if (active) setRolesError(error.message || "Could not load organization roles.");
+      })
+      .finally(() => {
+        if (active) setRolesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [canManageAccess, user?.role_id]);
 
   const loadDepartments = useCallback(async () => {
     setLoadingDepts(true);
@@ -136,17 +195,21 @@ export default function Upload() {
     }
   }
 
-  async function handleFiles(filesList) {
-    const files = Array.from(filesList);
+  async function uploadFiles(files, roleIds) {
     if (!files.length) return;
 
     if (!selectedDeptId) {
       setLoadError("Please select a department before uploading files.");
       return;
     }
+    if (!roleIds.length || (canManageAccess && rolesError)) {
+      setLoadError(rolesError || "Select at least one allowed role before uploading.");
+      return;
+    }
 
     setLoadError("");
     setNotice("");
+    setUploadingFiles(true);
 
     // Initialize queue items
     const newItems = files.map((file, idx) => ({
@@ -169,7 +232,7 @@ export default function Upload() {
               q.map((x) => (x.key === item.key ? { ...x, progress: pct } : x))
             );
           },
-          undefined,
+          roleIds,
           selectedDeptId || undefined
         );
         setUploadQueue((q) =>
@@ -191,7 +254,15 @@ export default function Upload() {
     }
 
     if (fileInput.current) fileInput.current.value = "";
+    setPendingFiles([]);
     await refreshDocuments();
+    setUploadingFiles(false);
+  }
+
+  function handleFiles(filesList) {
+    const files = Array.from(filesList);
+    setPendingFiles(files);
+    setLoadError("");
   }
 
   function handleFileInputChange(event) {
@@ -219,6 +290,55 @@ export default function Upload() {
       setDeleteError(err.message || "Delete failed");
     } finally {
       setDeletingIds((prev) => prev.filter((id) => id !== document.id));
+    }
+  }
+
+  async function handleReindex(document) {
+    if (!window.confirm(`Reindex "${document.filename}"? Its current search index will be replaced.`)) {
+      return;
+    }
+    setReindexError("");
+    setNotice("");
+    setReindexingIds((current) => [...current, document.id]);
+    try {
+      await reindexDocument(document.id);
+      setNotice(`"${document.filename}" was reindexed successfully.`);
+      await refreshDocuments();
+    } catch (err) {
+      setReindexError(err.message || `Failed to reindex "${document.filename}".`);
+      await refreshDocuments();
+    } finally {
+      setReindexingIds((current) => current.filter((id) => id !== document.id));
+    }
+  }
+
+  function openAccessEditor(document) {
+    setAccessEdit(document);
+    setAccessRoleIds(document.allowedRoleIds);
+    setAccessDepartmentId(document.departmentId);
+    setAccessError("");
+  }
+
+  async function saveDocumentAccess(event) {
+    event.preventDefault();
+    if (!accessEdit || !accessRoleIds.length || !accessDepartmentId) {
+      setAccessError("Choose a department and at least one allowed role.");
+      return;
+    }
+    setAccessSaving(true);
+    setAccessError("");
+    try {
+      await updateDocumentAccess(accessEdit.id, {
+        allowed_role_ids: accessRoleIds,
+        department_id: accessDepartmentId,
+      });
+      setNotice(`Access updated for "${accessEdit.filename}".`);
+      setAccessEdit(null);
+      await refreshDocuments();
+    } catch (error) {
+      setAccessError(error.message || "Failed to update document access.");
+    } finally {
+      setAccessSaving(false);
     }
   }
 
@@ -335,6 +455,89 @@ export default function Upload() {
             )}
           </div>
         </label>
+        {pendingFiles.length > 0 && (
+          <div className="mt-4 border-t border-hairline pt-4">
+            <p className="mb-2 text-xs font-medium text-ink-soft">
+              Selected files ({pendingFiles.length})
+            </p>
+            <ul className="mb-3 max-h-24 overflow-auto text-xs text-slate">
+              {pendingFiles.map((file, index) => (
+                <li key={`${file.name}-${index}`} className="truncate">{file.name}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="mt-4 border-t border-hairline pt-4">
+          <div className="mb-2">
+            <h3 className="text-sm font-medium text-ink">Allowed Roles</h3>
+            <p className="text-xs text-slate">
+              Department authorization and allowed roles are separate checks. A user needs both.
+            </p>
+          </div>
+          {canManageAccess ? (
+            rolesLoading ? (
+              <p className="text-xs text-slate">Loading organization roles…</p>
+            ) : rolesError ? (
+              <p role="alert" className="text-xs text-danger">{rolesError}</p>
+            ) : roles.length === 0 ? (
+              <p className="text-xs text-danger">No roles are available; uploads are disabled.</p>
+            ) : (
+              <fieldset className="flex flex-col gap-2">
+                <legend className="sr-only">Select roles that can access these documents</legend>
+                <label className="flex items-center gap-2 text-xs font-medium text-ink">
+                  <input
+                    type="checkbox"
+                    checked={selectedRoleIds.length === roles.length}
+                    onChange={(event) =>
+                      setSelectedRoleIds(event.target.checked ? roles.map((role) => role.id) : [])
+                    }
+                  />
+                  Select all
+                </label>
+                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                  {roles.map((role) => (
+                    <label key={role.id} className="flex items-center gap-2 text-xs text-ink-soft">
+                      <input
+                        type="checkbox"
+                        checked={selectedRoleIds.includes(role.id)}
+                        onChange={() =>
+                          setSelectedRoleIds((current) =>
+                            current.includes(role.id)
+                              ? current.filter((id) => id !== role.id)
+                              : [...current, role.id]
+                          )
+                        }
+                      />
+                      {role.name}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )
+          ) : (
+            <p className="text-xs text-slate">
+              These documents will be accessible only to your assigned role
+              {user?.role ? ` (${user.role})` : ""}. Contact an administrator to assign additional roles.
+            </p>
+          )}
+          <Button
+            type="button"
+            disabled={
+              !canUpload ||
+              !pendingFiles.length ||
+              uploadingFiles ||
+              !selectedDeptId ||
+              !selectedRoleIds.length ||
+              (canManageAccess && (rolesLoading || rolesError || !roles.length))
+            }
+            className="mt-4"
+            onClick={() => uploadFiles(pendingFiles, selectedRoleIds)}
+          >
+            {uploadingFiles
+              ? "Uploading…"
+              : `Upload${pendingFiles.length ? ` ${pendingFiles.length} selected file${pendingFiles.length === 1 ? "" : "s"}` : ""}`}
+          </Button>
+        </div>
       </Card>
 
       {/* Upload Queue Progress */}
@@ -410,11 +613,37 @@ export default function Upload() {
                         setPreview({
                           documentId: upload.id,
                           filename: upload.filename,
-                          page: 1,
+                          fileType: upload.fileType,
                         })
                       }
                     >
                       Preview
+                    </button>
+                  )}
+                  {canReindex && (
+                    <button
+                      type="button"
+                      disabled={upload.processing || reindexingIds.includes(upload.id)}
+                      className="text-xs font-medium text-index hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => handleReindex(upload)}
+                      title={
+                        upload.processing
+                          ? "This document is already processing"
+                          : "Rebuild this document's search index"
+                      }
+                    >
+                      {reindexingIds.includes(upload.id) ? "Reindexing…" : "Reindex"}
+                    </button>
+                  )}
+                  {canManageAccess && (
+                    <button
+                      type="button"
+                      disabled={upload.processing}
+                      className="text-xs font-medium text-index hover:underline disabled:opacity-50"
+                      onClick={() => openAccessEditor(upload)}
+                      title="Change this document's department and allowed roles"
+                    >
+                      Edit access
                     </button>
                   )}
                   {canDelete && (
@@ -439,15 +668,87 @@ export default function Upload() {
           {deleteError}
         </p>
       )}
+      {reindexError && (
+        <p role="alert" className="text-sm text-danger">
+          {reindexError}
+        </p>
+      )}
 
-      {/* PDF Preview Modal */}
+      {/* Document Preview Modal */}
       {preview && (
-        <PdfPreview
+        <DocumentPreview
           documentId={preview.documentId}
           filename={preview.filename}
-          page={preview.page}
+          fileType={preview.fileType}
           onClose={() => setPreview(null)}
         />
+      )}
+
+      {accessEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="flex max-h-[90vh] w-full max-w-lg flex-col gap-4 overflow-auto p-6 shadow-xl">
+            <div>
+              <h2 className="font-display text-lg text-ink">Edit document access</h2>
+              <p className="truncate text-xs text-slate">{accessEdit.filename}</p>
+              <p className="mt-2 text-xs text-slate">
+                Users must pass both department authorization and an allowed-role check.
+              </p>
+            </div>
+            <form onSubmit={saveDocumentAccess} className="flex flex-col gap-4">
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                Department
+                <select
+                  value={accessDepartmentId}
+                  onChange={(event) => setAccessDepartmentId(event.target.value)}
+                  className="rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink"
+                  required
+                >
+                  {departments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
+              </label>
+              <fieldset className="flex flex-col gap-2">
+                <legend className="mb-1 text-xs font-medium text-ink-soft">Allowed Roles</legend>
+                {rolesLoading && <p className="text-xs text-slate">Loading roles…</p>}
+                {rolesError && <p role="alert" className="text-xs text-danger">{rolesError}</p>}
+                {roles.map((role) => (
+                  <label key={role.id} className="flex items-center gap-2 text-sm text-ink">
+                    <input
+                      type="checkbox"
+                      checked={accessRoleIds.includes(role.id)}
+                      onChange={() =>
+                        setAccessRoleIds((current) =>
+                          current.includes(role.id)
+                            ? current.filter((id) => id !== role.id)
+                            : [...current, role.id]
+                        )
+                      }
+                    />
+                    {role.name}
+                  </label>
+                ))}
+              </fieldset>
+              {accessError && <p role="alert" className="text-sm text-danger">{accessError}</p>}
+              <div className="flex justify-end gap-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={accessSaving}
+                  onClick={() => setAccessEdit(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={accessSaving || rolesLoading || Boolean(rolesError) || !accessRoleIds.length}
+                >
+                  {accessSaving ? "Saving…" : "Save access"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
       )}
 
       {/* Create Department Modal */}

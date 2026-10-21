@@ -7,17 +7,6 @@ pipeline (chunking, embeddings) should import from ingestion.
 
 from .detector import detect_file_type, UnsupportedFileTypeError
 from .schema import IngestResult, FileType
-from .parsers.pdf_parser import parse_pdf
-from .parsers.docx_parser import parse_docx
-from .parsers.xlsx_parser import parse_xlsx
-from .parsers.txt_parser import parse_txt
-
-_PARSER_MAP = {
-    FileType.PDF: parse_pdf,
-    FileType.DOCX: parse_docx,
-    FileType.XLSX: parse_xlsx,
-    FileType.TXT: parse_txt,
-}
 
 
 def ingest_document(file_path: str, filename: str) -> IngestResult:
@@ -29,7 +18,22 @@ def ingest_document(file_path: str, filename: str) -> IngestResult:
         ValueError / parser-specific exceptions: file is corrupted or unreadable.
     """
     file_type = detect_file_type(file_path)
-    parser_fn = _PARSER_MAP[file_type]
+    if file_type == FileType.PDF:
+        from .parsers.pdf_parser import parse_pdf
+
+        parser_fn = parse_pdf
+    elif file_type == FileType.DOCX:
+        from .parsers.docx_parser import parse_docx
+
+        parser_fn = parse_docx
+    elif file_type == FileType.XLSX:
+        from .parsers.xlsx_parser import parse_xlsx
+
+        parser_fn = parse_xlsx
+    else:
+        from .parsers.txt_parser import parse_txt
+
+        parser_fn = parse_txt
 
     result = parser_fn(file_path, filename)
 

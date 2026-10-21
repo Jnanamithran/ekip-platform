@@ -6,6 +6,7 @@ import main
 
 
 def test_ingest_reads_uploaded_pdf_bytes(monkeypatch):
+    monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
     expected_bytes = b'%PDF-1.7 test document'
     parsed = {}
     reported_stages = []
@@ -60,6 +61,7 @@ def test_ingest_reads_uploaded_pdf_bytes(monkeypatch):
             'token': 'test-token',
         },
         files={'file': ('report.pdf', expected_bytes, 'application/pdf')},
+        headers={'x-ekip-service-key': 'test-service-key-12345678901234567890'},
     )
 
     assert response.status_code == 200
@@ -76,3 +78,47 @@ def test_ingest_reads_uploaded_pdf_bytes(monkeypatch):
         'Generating embeddings for 1 chunk(s)',
         'Writing chunks to the searchable index',
     ]
+
+
+def test_ingest_rejects_empty_content_when_visual_index_is_unavailable(monkeypatch):
+    monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
+
+    def empty_document(file_path, filename):
+        from ingestion.schema import FileType
+
+        return SimpleNamespace(
+            filename=filename,
+            file_type=FileType.TXT,
+            pages=[],
+            is_scanned_or_empty=True,
+            warning='File is empty.',
+        )
+
+    async def fake_report_progress(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        main,
+        'ingest_document',
+        empty_document,
+    )
+    monkeypatch.setattr(main, 'report_progress', fake_report_progress)
+    monkeypatch.setattr(main, 'chunk_document', lambda result, document_id: [])
+
+    response = TestClient(main.app).post(
+        '/ingest',
+        data={
+            'rbac': (
+                '{"org_id":"org-1","workspace_id":"workspace-1",'
+                '"department_id":"department-1","role_id":"role-admin",'
+                '"allowed_role_ids":["role-admin"]}'
+            ),
+            'document_id': '8c91ea18-102d-4d4a-ad80-f2c71af8d84c',
+            'token': 'test-token',
+        },
+        files={'file': ('empty.txt', b'', 'text/plain')},
+        headers={'x-ekip-service-key': 'test-service-key-12345678901234567890'},
+    )
+
+    assert response.status_code == 422
+    assert response.json()['detail'] == 'File is empty.'

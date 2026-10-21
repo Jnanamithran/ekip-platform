@@ -32,10 +32,15 @@ cross-encoder/ms-marco-MiniLM-L-6-v2
   - Safe on RTX 3050 6GB alongside the embedding model
 """
 
+from __future__ import annotations
+
 from typing import List
-from sentence_transformers import CrossEncoder
+from typing import TYPE_CHECKING
 
 from retrieval.schema import RetrievedChunk
+
+if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
 
 # ── Model ────────────────────────────────────────────────────────────────────
 # Loaded once at module import time — not per request.
@@ -49,6 +54,8 @@ def _get_reranker() -> CrossEncoder:
     """Lazy singleton loader — model loads on first rerank() call."""
     global _reranker
     if _reranker is None:
+        from sentence_transformers import CrossEncoder
+
         print(f"  [reranker] Loading {_MODEL_NAME} …")
         _reranker = CrossEncoder(_MODEL_NAME, max_length=512)
         print(f"  [reranker] Model ready.")

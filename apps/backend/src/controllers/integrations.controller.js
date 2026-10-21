@@ -175,6 +175,29 @@ function driveParentQuery(parentId) {
   return `'${id}' in parents and trashed=false`;
 }
 
+async function downloadDriveFile(drive, fileId, maxBytes = MAX_FILE_BYTES) {
+  const response = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'stream' }
+  );
+  const chunks = [];
+  let size = 0;
+
+  for await (const chunk of response.data) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) {
+      response.data.destroy();
+      const error = new Error('File is larger than 50 MB');
+      error.code = 'DRIVE_FILE_TOO_LARGE';
+      throw error;
+    }
+    chunks.push(buffer);
+  }
+
+  return Buffer.concat(chunks, size);
+}
+
 async function listFolders(req, res) {
   try {
     const drive = await getDrive(req.user.user_id);
@@ -349,15 +372,12 @@ async function importFiles(req, res) {
           continue;
         }
 
-        const download = await drive.files.get(
-          { fileId: meta.id, alt: 'media' },
-          { responseType: 'arraybuffer' }
-        );
+        const buffer = await downloadDriveFile(drive, meta.id);
 
         const { status: code, body } = await ingestDocument({
           user: req.user,
           token,
-          buffer: Buffer.from(download.data),
+          buffer,
           filename: path.parse(meta.name).name + ext,
           mimetype: meta.mimeType,
           allowedRoleIds: selection.allowed_role_ids,
@@ -371,6 +391,10 @@ async function importFiles(req, res) {
         );
       } catch (err) {
         if (isConnectionExpired(err)) return replyReconnect(res, req.user.user_id);
+        if (err.code === 'DRIVE_FILE_TOO_LARGE') {
+          results.push({ file_id: selection.file.id, status: 'error', error: err.message });
+          continue;
+        }
         console.error('[integrations] import failed for one file:', err.message);
         results.push({ file_id: selection.file.id, status: 'error', error: 'Could not import this file' });
       }
@@ -400,4 +424,13 @@ async function disconnect(req, res) {
   }
 }
 
-module.exports = { connect, callback, status, listFolders, listFiles, importFiles, disconnect };
+module.exports = {
+  connect,
+  callback,
+  status,
+  listFolders,
+  listFiles,
+  importFiles,
+  disconnect,
+  downloadDriveFile,
+};

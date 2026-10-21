@@ -1,12 +1,13 @@
 import os
 import json
+import secrets
 import tempfile
 import uuid
 import asyncio
 import httpx
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from pydantic import ValidationError
 from typing import List, Optional
@@ -38,6 +39,17 @@ def health():
 
 VISUAL_COLLECTION = "ekip_visual_documents"
 VISUAL_SERVICE_URL = os.getenv("VISUAL_SERVICE_URL", "http://ai-service-visual:8001")
+AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "")
+
+
+async def require_backend_service_key(x_ekip_service_key: str | None = Header(default=None)):
+    if len(AI_SERVICE_API_KEY) < 32:
+        raise HTTPException(status_code=503, detail='AI service authentication is not configured')
+    if not x_ekip_service_key or not secrets.compare_digest(
+        x_ekip_service_key,
+        AI_SERVICE_API_KEY,
+    ):
+        raise HTTPException(status_code=401, detail='Invalid service credentials')
 
 
 class RBACInfo(BaseModel):
@@ -206,6 +218,7 @@ async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
             f'{VISUAL_SERVICE_URL}/visual/ask',
+            headers={'x-ekip-service-key': AI_SERVICE_API_KEY},
             json={
                 'question': question,
                 'org_id': rbac_dict['org_id'],
@@ -236,7 +249,7 @@ async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
         'answer': payload.get('answer', ''),
         'sources': citations,
         'model': payload.get('model', ''),
-        'has_answer': bool(payload.get('answer')),
+        'has_answer': bool(citations),
         'pipeline': 'visual',
     }
 
@@ -246,7 +259,7 @@ async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 @app.post('/ask', response_model=AskResponse)
-async def ask(req: AskRequest):
+async def ask(req: AskRequest, _service_key: None = Depends(require_backend_service_key)):
     '''
     Full RAG pipeline for one query:
 
@@ -321,6 +334,7 @@ async def ask(req: AskRequest):
 
 @app.post('/ingest')
 async def ingest(
+    _service_key: None = Depends(require_backend_service_key),
     rbac: str = Form(...),
     document_id: str = Form(...),
     token: str = Form(...),
@@ -346,6 +360,7 @@ async def ingest(
     filename = os.path.basename((file.filename or 'upload').replace('\\', '/'))
 
     try:
+        visual_indexed = False
         async def update_document(stage: str, progress: int, chunk_count=None):
             details = {'stage': stage, 'progress': progress}
             if chunk_count is not None:
@@ -396,6 +411,7 @@ async def ingest(
                     ) as visual_client:
                         visual_response = await visual_client.post(
                             f'{VISUAL_SERVICE_URL}/visual/ingest',
+                            headers={'x-ekip-service-key': AI_SERVICE_API_KEY},
                             data={
                                 'rbac':        json.dumps(visual_rbac),
                                 'document_id': document_id,
@@ -409,6 +425,7 @@ async def ingest(
                             },
                         )
                         visual_response.raise_for_status()
+                        visual_indexed = visual_response.json().get('pages_upserted', 0) > 0
                 except Exception as exc:
                     # Non-fatal: text indexing below still proceeds, and the
                     # document remains searchable through the text pipeline.
@@ -437,6 +454,11 @@ async def ingest(
                 60,
                 chunk_count=len(chunks),
             )
+            if not chunks and not visual_indexed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=ingest_result.warning or 'No searchable content was extracted from this document.',
+                )
             await update_document(
                 f'Generating embeddings for {len(chunks)} chunk(s)',
                 70,
@@ -461,6 +483,44 @@ async def ingest(
                 'chunk_count': len(chunks),
                 'status': 'Indexed',
             }
+    except HTTPException:
+        raise
     except Exception as exc:
         print(f'[ai-service] ingest error: {exc}')
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post('/preview')
+async def preview(
+    file: UploadFile = File(...),
+    _service_key: None = Depends(require_backend_service_key),
+):
+    filename = os.path.basename((file.filename or 'upload').replace('\\', '/'))
+    file_type = Path(filename).suffix.lower()
+    if file_type not in {'.docx', '.xlsx', '.txt'}:
+        raise HTTPException(status_code=415, detail='Preview supports DOCX, XLSX, and TXT files')
+
+    content = await file.read(50 * 1024 * 1024 + 1)
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail='File exceeds the 50 MB preview limit')
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / f'{uuid.uuid4()}{file_type}'
+            file_path.write_bytes(content)
+            result = ingest_document(str(file_path), filename=filename)
+
+        return {
+            'filename': result.filename,
+            'file_type': result.file_type.value,
+            'pages': [
+                {'page_num': page.page_num, 'text': page.text}
+                for page in result.pages
+            ],
+            'warning': result.warning,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='File could not be previewed') from exc
+    except Exception as exc:
+        print(f'[ai-service] preview error for {filename}: {exc}')
+        raise HTTPException(status_code=422, detail='File could not be previewed') from exc
