@@ -8,6 +8,7 @@ const PERMISSIONS = Object.freeze([
   'drive:import',
   'users:manage',
   'roles:manage',
+  'departments:manage',
   'workspace:manage',
   'analytics:view',
 ]);

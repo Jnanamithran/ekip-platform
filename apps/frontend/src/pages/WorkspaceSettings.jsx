@@ -9,16 +9,12 @@ export default function WorkspaceSettings() {
   const [workspaceId, setWorkspaceId] = useState("");
   const [dashboard, setDashboard] = useState(null);
   const [workspaceName, setWorkspaceName] = useState("");
-  const [newDeptName, setNewDeptName] = useState("");
   const [loading, setLoading] = useState(true);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [creatingDept, setCreatingDept] = useState(false);
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [saved, setSaved] = useState(false);
-  const [deptError, setDeptError] = useState("");
-  const [deptSaved, setDeptSaved] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -95,32 +91,6 @@ export default function WorkspaceSettings() {
     }
   }
 
-  async function createDepartment(event) {
-    event.preventDefault();
-    if (!workspaceId || !newDeptName.trim() || creatingDept) return;
-    setCreatingDept(true);
-    setDeptError("");
-    setDeptSaved(false);
-    try {
-      await apiFetch("/admin/departments", {
-        method: "POST",
-        body: JSON.stringify({ workspace_id: workspaceId, name: newDeptName.trim() }),
-      });
-      setNewDeptName("");
-      setDeptSaved(true);
-      // Refresh dashboard to show new department
-      apiFetch(`/admin/workspaces/${encodeURIComponent(workspaceId)}`)
-        .then(({ workspace }) => {
-          setDashboard(workspace);
-        })
-        .catch(() => {});
-    } catch (err) {
-      setDeptError(err.message || "Could not create department");
-    } finally {
-      setCreatingDept(false);
-    }
-  }
-
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -135,7 +105,8 @@ export default function WorkspaceSettings() {
             Select workspace
             <select
               value={workspaceId}
-              onChange={(event) => {            setDashboardLoading(true);
+              onChange={(event) => {
+                setDashboardLoading(true);
                 setSaveError("");
                 setSaved(false);
                 setWorkspaceId(event.target.value);
@@ -199,32 +170,6 @@ export default function WorkspaceSettings() {
             {saved && (
               <p role="status" className="w-full text-sm text-success">Workspace name updated.</p>
             )}
-          </Card>
-
-          <Card className="p-5">
-            <form onSubmit={createDepartment} className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-xs font-medium text-slate">
-                Add a department
-                <input
-                  required
-                  maxLength={80}
-                  value={newDeptName}
-                  onChange={(event) => setNewDeptName(event.target.value)}
-                  placeholder="e.g. Engineering, HR, Sales"
-                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink"
-                />
-              </label>
-              <Button type="submit" disabled={creatingDept || !newDeptName.trim()}>
-                {creatingDept ? "Creating…" : "Create department"}
-              </Button>
-            </form>
-            {deptError && <p role="alert" className="mt-2 text-sm text-danger">{deptError}</p>}
-            {deptSaved && (
-              <p role="status" className="mt-2 text-sm text-success">Department created.</p>
-            )}
-            <p className="mt-2 text-xs text-slate">
-              Departments group users and documents within this workspace.
-            </p>
           </Card>
 
           <section className="grid gap-4 sm:grid-cols-3" aria-label="Workspace totals">

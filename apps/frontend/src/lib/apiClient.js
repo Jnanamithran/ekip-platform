@@ -281,11 +281,19 @@ function sendDocumentUpload(formData, token, onProgress) {
     });
 }
 
-export async function uploadDocument(file, onProgress = () => { }, allowedRoleIds) {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (allowedRoleIds) {
+export async function uploadDocument(file, onProgress = () => { }, allowedRoleIds, departmentId) {
+    let formData;
+    if (file instanceof FormData) {
+        formData = file;
+    } else {
+        formData = new FormData();
+        formData.append('file', file);
+    }
+    if (allowedRoleIds && !formData.has('allowed_role_ids')) {
         formData.append('allowed_role_ids', JSON.stringify(allowedRoleIds));
+    }
+    if (departmentId && !formData.has('department_id')) {
+        formData.append('department_id', departmentId);
     }
 
     try {
@@ -436,10 +444,14 @@ export async function getDriveFolders(parentId, pageToken) {
  * Each selection carries a list of organization role IDs for document access.
  * Response: { results: [{ file_id, filename, status: 'success'|'error', chunk_count?, error? }] }
  */
-export async function importDriveFiles(files) {
+export async function importDriveFiles(files, options = {}) {
+    const payload = {
+        files,
+        ...(typeof options === 'string' ? { department_id: options } : options),
+    };
     return apiFetch('/integrations/google/import', {
         method: 'POST',
-        body: JSON.stringify({ files }),
+        body: JSON.stringify(payload),
     });
 }
 

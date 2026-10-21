@@ -283,9 +283,25 @@ async function ingestDocument({
   filename: rawFilename,
   mimetype,
   allowedRoleIds,
+  departmentId,
 }) {
   const access = await validateAllowedRoleIds(allowedRoleIds, user);
   if (access.error) return { status: 400, body: { error: access.error } };
+
+  let targetDepartmentId = user.department_id;
+  if (departmentId) {
+    const dept = await prisma.department.findFirst({
+      where: {
+        id: departmentId,
+        workspace: { org_id: user.org_id },
+      },
+      select: { id: true },
+    });
+    if (!dept) {
+      return { status: 400, body: { error: 'Invalid department specified' } };
+    }
+    targetDepartmentId = dept.id;
+  }
 
   const documentId = randomUUID();
   let documentCreated = false;
@@ -301,7 +317,7 @@ async function ingestDocument({
     await prisma.document.create({
       data: {
         id: documentId,
-        department_id: user.department_id,
+        department_id: targetDepartmentId,
         filename,
         file_type: fileType,
         status: 'Processing',
@@ -322,8 +338,9 @@ async function ingestDocument({
 
     // Build FormData for multipart upload
     const form = new FORM_DATA();
-        form.append('rbac', JSON.stringify({
+    form.append('rbac', JSON.stringify({
       ...rbacFromReq({ user }),
+      department_id: targetDepartmentId,
       user_id: user.user_id,
       allowed_role_ids: access.roleIds,
     }));
@@ -389,11 +406,17 @@ async function ingest(req, res) {
   let allowedRoleIds = [req.user.role_id];
   if (req.body.allowed_role_ids !== undefined) {
     try {
-      allowedRoleIds = JSON.parse(req.body.allowed_role_ids);
+      allowedRoleIds = typeof req.body.allowed_role_ids === 'string'
+        ? JSON.parse(req.body.allowed_role_ids)
+        : req.body.allowed_role_ids;
     } catch {
       return res.status(400).json({ error: 'allowed_role_ids must be valid JSON' });
     }
   }
+  const departmentId = typeof req.body.department_id === 'string' && req.body.department_id.trim()
+    ? req.body.department_id.trim()
+    : undefined;
+
   const { status, body } = await ingestDocument({
     user: req.user,
     token: req.headers['x-ai-token'] || '',
@@ -401,6 +424,7 @@ async function ingest(req, res) {
     filename: req.file.originalname,
     mimetype: req.file.mimetype,
     allowedRoleIds,
+    departmentId,
   });
   res.status(status).json(body);
 }
@@ -627,6 +651,8 @@ async function listDocuments(req, res) {
       where: documentAccessWhere(req, { manageAccess: true }),
       select: {
         id: true,
+        department_id: true,
+        department: { select: { id: true, name: true } },
         filename: true,
         file_type: true,
         status: true,
@@ -684,8 +710,10 @@ async function listDocuments(req, res) {
       );
       res.json({
         documents: [
-          ...savedDocuments.map(({ storage_key: storageKey, allowed_roles: allowedRoles, ...document }) => ({
+          ...savedDocuments.map(({ storage_key: storageKey, allowed_roles: allowedRoles, department, ...document }) => ({
             ...document,
+            department_id: document.department_id,
+            department_name: department?.name || '',
             allowed_role_ids: allowedRoles.map((role) => role.role_id),
             preview_available: Boolean(storageKey && document.file_type === 'pdf'),
           })),
@@ -695,8 +723,10 @@ async function listDocuments(req, res) {
     } catch (err) {
       console.error('[ai] indexed document history unavailable:', err.message);
       res.json({
-        documents: savedDocuments.map(({ storage_key: storageKey, allowed_roles: allowedRoles, ...document }) => ({
+        documents: savedDocuments.map(({ storage_key: storageKey, allowed_roles: allowedRoles, department, ...document }) => ({
           ...document,
+          department_id: document.department_id,
+          department_name: department?.name || '',
           allowed_role_ids: allowedRoles.map((role) => role.role_id),
           preview_available: Boolean(storageKey && document.file_type === 'pdf'),
         })),

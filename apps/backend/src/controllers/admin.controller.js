@@ -286,59 +286,6 @@ async function updateWorkspace(req, res) {
   }
 }
 
-// POST /admin/departments  (Admin only)
-async function createDepartment(req, res) {
-  try {
-    const { workspace_id, name } = req.body || {};
-
-    if (typeof workspace_id !== 'string' || !workspace_id ||
-        typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({ error: 'workspace_id and name are required' });
-    }
-
-    // The workspace must belong to the admin's OWN organization.
-    // Same answer for "doesn't exist" and "not yours".
-    const workspace = await prisma.workspace.findFirst({
-      where: { id: workspace_id, org_id: req.user.org_id },
-    });
-    if (!workspace) {
-      return res.status(404).json({ error: 'Workspace not found' });
-    }
-
-    const department = await prisma.department.create({
-      data: { name: name.trim(), workspace_id },
-      select: { id: true, name: true, workspace_id: true },
-    });
-
-    res.status(201).json({ department });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Something went wrong' });
-  }
-}
-
-// GET /admin/departments  (Admin only)
-// Optional filter: ?workspace_id=...
-async function listDepartments(req, res) {
-  try {
-    const { workspace_id } = req.query;
-
-    // The org filter comes from the token. workspace_id only narrows the result.
-    const departments = await prisma.department.findMany({
-      where: {
-        workspace: { org_id: req.user.org_id },
-        ...(workspace_id && { workspace_id }),
-      },
-      select: { id: true, name: true, workspace_id: true },
-      orderBy: { name: 'asc' },
-    });
-
-    res.json({ departments });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Something went wrong' });
-  }
-}
 // PATCH /admin/users/:id
 async function updateUser(req, res) {
   try {
@@ -524,6 +471,254 @@ async function queryAnalytics(req, res) {
     res.status(500).json({ error: 'Failed to load query analytics' });
   }
 }
+
+// GET /admin/departments
+async function listDepartments(req, res) {
+  try {
+    const { workspace_id: workspaceId } = req.query;
+    const departments = await prisma.department.findMany({
+      where: {
+        workspace: { org_id: req.user.org_id },
+        ...(workspaceId && { workspace_id: workspaceId }),
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        workspace_id: true,
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            org_id: true,
+          },
+        },
+        _count: {
+          select: {
+            users: true,
+            documents: true,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    res.json({ departments });
+  } catch (err) {
+    console.error('[admin] list departments failed:', err.message);
+    res.status(500).json({ error: 'Failed to load departments' });
+  }
+}
+
+// GET /admin/departments/:id
+async function getDepartment(req, res) {
+  try {
+    const { id: departmentId } = req.params;
+    const department = await prisma.department.findFirst({
+      where: {
+        id: departmentId,
+        workspace: { org_id: req.user.org_id },
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        workspace_id: true,
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            org_id: true,
+          },
+        },
+        _count: {
+          select: {
+            users: true,
+            documents: true,
+          },
+        },
+      },
+    });
+
+    if (!department) {
+      return res.status(404).json({ error: 'Department not found' });
+    }
+
+    res.json({ department });
+  } catch (err) {
+    console.error('[admin] get department failed:', err.message);
+    res.status(500).json({ error: 'Failed to load department' });
+  }
+}
+
+// POST /admin/departments
+async function createDepartment(req, res) {
+  try {
+    const { workspace_id, name, description } = req.body || {};
+
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Department name is required' });
+    }
+
+    let targetWorkspaceId = workspace_id;
+    if (!targetWorkspaceId) {
+      const workspace = await prisma.workspace.findFirst({
+        where: { org_id: req.user.org_id },
+        select: { id: true },
+      });
+      if (!workspace) {
+        return res.status(400).json({ error: 'No workspace found for this organization.' });
+      }
+      targetWorkspaceId = workspace.id;
+    } else {
+      const workspace = await prisma.workspace.findFirst({
+        where: { id: targetWorkspaceId, org_id: req.user.org_id },
+        select: { id: true },
+      });
+      if (!workspace) {
+        return res.status(404).json({ error: 'Workspace not found' });
+      }
+    }
+
+    const existing = await prisma.department.findFirst({
+      where: {
+        name: name.trim(),
+        workspace: { org_id: req.user.org_id },
+      },
+    });
+    if (existing) {
+      return res.status(409).json({ error: 'A department with this name already exists' });
+    }
+
+    const department = await prisma.department.create({
+      data: {
+        name: name.trim(),
+        description: typeof description === 'string' && description.trim() ? description.trim() : null,
+        workspace_id: targetWorkspaceId,
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        workspace_id: true,
+        workspace: { select: { id: true, name: true } },
+      },
+    });
+
+    res.status(201).json({ department });
+  } catch (err) {
+    console.error('[admin] create department failed:', err.message);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+// PATCH /admin/departments/:id
+async function updateDepartment(req, res) {
+  try {
+    const { id: departmentId } = req.params;
+    const { name, description } = req.body || {};
+
+    if (name === undefined && description === undefined) {
+      return res.status(400).json({ error: 'Provide a name or description to update' });
+    }
+
+    const department = await prisma.department.findFirst({
+      where: {
+        id: departmentId,
+        workspace: { org_id: req.user.org_id },
+      },
+      select: { id: true, name: true },
+    });
+
+    if (!department) {
+      return res.status(404).json({ error: 'Department not found' });
+    }
+
+    const updateData = {};
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'Department name is required' });
+      }
+      const duplicate = await prisma.department.findFirst({
+        where: {
+          name: name.trim(),
+          workspace: { org_id: req.user.org_id },
+          id: { not: departmentId },
+        },
+      });
+      if (duplicate) {
+        return res.status(409).json({ error: 'Another department with this name already exists' });
+      }
+      updateData.name = name.trim();
+    }
+
+    if (description !== undefined) {
+      updateData.description = typeof description === 'string' && description.trim() ? description.trim() : null;
+    }
+
+    const updatedDept = await prisma.department.update({
+      where: { id: departmentId },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        workspace_id: true,
+        workspace: { select: { id: true, name: true } },
+      },
+    });
+
+    res.json({ department: updatedDept });
+  } catch (err) {
+    console.error('[admin] update department failed:', err.message);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+// DELETE /admin/departments/:id
+async function deleteDepartment(req, res) {
+  try {
+    const { id: departmentId } = req.params;
+
+    const department = await prisma.department.findFirst({
+      where: {
+        id: departmentId,
+        workspace: { org_id: req.user.org_id },
+      },
+      select: { id: true, name: true },
+    });
+
+    if (!department) {
+      return res.status(404).json({ error: 'Department not found' });
+    }
+
+    const [userCount, documentCount] = await Promise.all([
+      prisma.user.count({ where: { department_id: departmentId } }),
+      prisma.document.count({ where: { department_id: departmentId } }),
+    ]);
+
+    if (userCount > 0 || documentCount > 0) {
+      return res.status(400).json({
+        error: "Cannot delete department that has existing users (" + userCount + ") or documents (" + documentCount + "). Please reassign them first.",
+        code: 'DEPARTMENT_HAS_RECORDS',
+        userCount,
+        documentCount,
+      });
+    }
+
+    await prisma.department.delete({
+      where: { id: departmentId },
+    });
+
+    res.json({ message: 'Department deleted successfully', id: departmentId });
+  } catch (err) {
+    console.error('[admin] delete department failed:', err.message);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
 module.exports = {
   updateUser,
   resetPassword,
@@ -537,5 +732,8 @@ module.exports = {
   updateWorkspace,
   createDepartment,
   listDepartments,
+  getDepartment,
+  updateDepartment,
+  deleteDepartment,
   queryAnalytics,
 };

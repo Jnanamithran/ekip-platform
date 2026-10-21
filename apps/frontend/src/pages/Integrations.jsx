@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import {
+  apiFetch,
+  createDepartment,
   disconnectDrive,
+  getDepartments,
   getDriveConnection,
   getDriveConnectUrl,
   getDriveFiles,
@@ -38,7 +41,7 @@ function RoleSelector({ filename, selected, onChange, roles, ownRoleId, canManag
   }
 
   return (
-    <div className="mt-2 rounded-md border border-hairline bg-paper p-3">
+    <div className="rounded-md border border-hairline bg-paper p-3">
       <p className="mb-2 text-sm font-medium text-ink-soft">
         Who can search &ldquo;{filename}&rdquo;?
       </p>
@@ -67,6 +70,12 @@ function RoleSelector({ filename, selected, onChange, roles, ownRoleId, canManag
 
 export default function Integrations() {
   const { user } = useAuth();
+  const canManageDepts = Boolean(
+    user?.is_owner ||
+      user?.permissions?.includes("departments:manage") ||
+      user?.permissions?.includes("workspace:manage")
+  );
+
   const [searchParams, setSearchParams] = useSearchParams();
   const [connected, setConnected] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -76,12 +85,25 @@ export default function Integrations() {
   const [filePageToken, setFilePageToken] = useState(null);
   const [folderPageToken, setFolderPageToken] = useState(null);
   const [roles, setRoles] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
+  const [itemDepartments, setItemDepartments] = useState({});
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState({});
   const [selectedFolderIds, setSelectedFolderIds] = useState([]);
   const [fileRoles, setFileRoles] = useState({});
   const [importing, setImporting] = useState(false);
   const [importResults, setImportResults] = useState([]);
+
+  // Create Department Modal state
+  const [showCreateDeptModal, setShowCreateDeptModal] = useState(false);
+  const [newDeptName, setNewDeptName] = useState("");
+  const [newDeptDesc, setNewDeptDesc] = useState("");
+  const [newDeptWsId, setNewDeptWsId] = useState("");
+  const [creatingDept, setCreatingDept] = useState(false);
+  const [createDeptError, setCreateDeptError] = useState("");
+
   const [error, setError] = useState(() => {
     const status = searchParams.get("error");
     return status
@@ -108,15 +130,19 @@ export default function Integrations() {
           : Promise.resolve(null),
       ]);
       if (filesResult) {
-        setDriveFiles((previous) => filePage
-          ? [...previous, ...(filesResult.files ?? [])]
-          : filesResult.files ?? []);
+        setDriveFiles((previous) =>
+          filePage
+            ? [...previous, ...(filesResult.files ?? [])]
+            : filesResult.files ?? []
+        );
         setFilePageToken(filesResult.next_page_token ?? null);
       }
       if (foldersResult) {
-        setDriveFolders((previous) => folderPage
-          ? [...previous, ...(foldersResult.folders ?? [])]
-          : foldersResult.folders ?? []);
+        setDriveFolders((previous) =>
+          folderPage
+            ? [...previous, ...(foldersResult.folders ?? [])]
+            : foldersResult.folders ?? []
+        );
         setFolderPageToken(foldersResult.next_page_token ?? null);
       }
     } catch (err) {
@@ -126,10 +152,31 @@ export default function Integrations() {
     }
   }, []);
 
+  const loadDepartmentsAndWorkspaces = useCallback(async () => {
+    try {
+      const [deptRes, wsRes] = await Promise.all([
+        getDepartments().catch(() => ({ departments: [] })),
+        apiFetch("/admin/workspaces").catch(() => ({ workspaces: [] })),
+      ]);
+      const depts = deptRes.departments || [];
+      setDepartments(depts);
+      setWorkspaces(wsRes.workspaces || []);
+
+      if (wsRes.workspaces?.length && !newDeptWsId) {
+        setNewDeptWsId(wsRes.workspaces[0].id);
+      }
+
+      if (depts.length > 0) {
+        const userDeptExists = depts.some((d) => d.id === user?.department_id);
+        setSelectedDepartmentId((prev) => prev || (userDeptExists ? user.department_id : depts[0].id));
+      }
+    } catch (err) {
+      console.error("Failed to load departments:", err);
+    }
+  }, [newDeptWsId, user?.department_id]);
+
   useEffect(() => {
     let active = true;
-    // The OAuth callback lands back here with ?connected=google (or an
-    // error). Consume the param once so a reload doesn't replay the notice.
     const oauthStatus = searchParams.get("connected");
     const oauthError = searchParams.get("error");
     if (oauthStatus || oauthError) {
@@ -141,17 +188,22 @@ export default function Integrations() {
         const isConnected = Boolean(res.connected);
         setConnected(isConnected);
         if (isConnected) {
-          const roleRequest = user?.is_owner ||
-            user?.permissions?.includes("documents:manage_access")
-            ? getOrganizationRoles().then((result) => setRoles(result.roles ?? []))
-            : Promise.resolve(setRoles([{
-              id: user.role_id,
-              name: user.role,
-              is_owner: user.is_owner,
-            }]));
+          const roleRequest =
+            user?.is_owner || user?.permissions?.includes("documents:manage_access")
+              ? getOrganizationRoles().then((result) => setRoles(result.roles ?? []))
+              : Promise.resolve(
+                  setRoles([
+                    {
+                      id: user.role_id,
+                      name: user.role,
+                      is_owner: user.is_owner,
+                    },
+                  ])
+                );
           await Promise.all([
             loadItems(null),
             roleRequest,
+            loadDepartmentsAndWorkspaces(),
           ]);
         }
       })
@@ -164,22 +216,53 @@ export default function Integrations() {
     return () => {
       active = false;
     };
-  }, [loadItems, searchParams, setSearchParams, user]);
+  }, [loadDepartmentsAndWorkspaces, loadItems, searchParams, setSearchParams, user]);
+
+  async function handleCreateDepartment(e) {
+    e.preventDefault();
+    if (!newDeptName.trim()) {
+      setCreateDeptError("Department name is required");
+      return;
+    }
+    setCreatingDept(true);
+    setCreateDeptError("");
+    try {
+      const { department } = await createDepartment({
+        name: newDeptName.trim(),
+        description: newDeptDesc.trim() || undefined,
+        workspace_id: newDeptWsId || undefined,
+      });
+      setDepartments((prev) => [...prev, department]);
+      setSelectedDepartmentId(department.id);
+      setNotice(`Department "${department.name}" created and selected.`);
+      setNewDeptName("");
+      setNewDeptDesc("");
+      setShowCreateDeptModal(false);
+    } catch (err) {
+      setCreateDeptError(err.message || "Failed to create department");
+    } finally {
+      setCreatingDept(false);
+    }
+  }
 
   const canManageAccess =
     Boolean(user?.is_owner) || user?.permissions?.includes("documents:manage_access");
   const ownRoleMissing = Object.entries(selectedFiles).some(
-    ([fileId, selected]) => selected &&
+    ([fileId, selected]) =>
+      selected &&
       !(fileRoles[fileId] ?? [user?.role_id]).includes(user?.role_id)
   );
   const emptyRoles = Object.entries(selectedFiles).some(
-    ([fileId, selected]) => selected &&
-      !(fileRoles[fileId] ?? [user?.role_id]).length
+    ([fileId, selected]) =>
+      selected && !(fileRoles[fileId] ?? [user?.role_id]).length
   );
   const selectedEntries = Object.entries(selectedFiles).filter(([, selected]) => selected);
   const importDisabled =
-    importing || selectedEntries.length === 0 || selectedEntries.length > MAX_FILES_PER_IMPORT ||
-    emptyRoles || ownRoleMissing;
+    importing ||
+    selectedEntries.length === 0 ||
+    selectedEntries.length > MAX_FILES_PER_IMPORT ||
+    emptyRoles ||
+    ownRoleMissing;
 
   function selectionDefault() {
     return [user.role_id];
@@ -188,13 +271,18 @@ export default function Integrations() {
   function toggleSelection(item) {
     setSelectedFiles((previous) => ({ ...previous, [item.id]: !previous[item.id] }));
     if (item.is_folder) {
-      setSelectedFolderIds((previous) => previous.includes(item.id)
-        ? previous.filter((id) => id !== item.id)
-        : [...previous, item.id]);
+      setSelectedFolderIds((previous) =>
+        previous.includes(item.id)
+          ? previous.filter((id) => id !== item.id)
+          : [...previous, item.id]
+      );
     }
     setFileRoles((previous) =>
       previous[item.id] ? previous : { ...previous, [item.id]: selectionDefault() }
     );
+    if (!itemDepartments[item.id] && selectedDepartmentId) {
+      setItemDepartments((prev) => ({ ...prev, [item.id]: selectedDepartmentId }));
+    }
   }
 
   function openFolder(folder) {
@@ -218,7 +306,7 @@ export default function Integrations() {
     setError("");
     try {
       const res = await getDriveConnectUrl();
-      window.location.href = res.url; // redirect to Google OAuth
+      window.location.href = res.url;
     } catch (err) {
       setError(err.message);
       setConnecting(false);
@@ -240,6 +328,7 @@ export default function Integrations() {
       setSelectedFiles({});
       setSelectedFolderIds([]);
       setFileRoles({});
+      setItemDepartments({});
       setImportResults([]);
       setNotice("Google Drive disconnected.");
     } catch (err) {
@@ -248,10 +337,16 @@ export default function Integrations() {
   }
 
   async function importSelected() {
+    if (!selectedDepartmentId && departments.length > 0) {
+      setError("Please select a target department for the imported files.");
+      return;
+    }
+
     const files = selectedEntries.map(([fileId]) => ({
       file_id: fileId,
       is_folder: selectedFolderIds.includes(fileId),
       allowed_role_ids: fileRoles[fileId] ?? [user.role_id],
+      department_id: itemDepartments[fileId] || selectedDepartmentId || undefined,
     }));
 
     if (!files.length || importDisabled) return;
@@ -260,12 +355,16 @@ export default function Integrations() {
     setNotice("");
     const allResults = [];
     try {
-      const res = await importDriveFiles(files);
+      const res = await importDriveFiles(files, {
+        department_id: selectedDepartmentId || undefined,
+        folder_mappings: itemDepartments,
+      });
       allResults.push(...(res.results ?? []));
       setImportResults((prev) => [...allResults, ...prev]);
       setSelectedFiles({});
       setSelectedFolderIds([]);
       setFileRoles({});
+      setItemDepartments({});
       const ok = allResults.filter((r) => r.status === "success").length;
       const total = allResults.length;
       setNotice(`Imported ${ok} of ${total} file${total === 1 ? "" : "s"}.`);
@@ -285,7 +384,7 @@ export default function Integrations() {
       <div>
         <h1 className="font-display text-xl text-ink">Integrations</h1>
         <p className="text-sm text-slate">
-          Connect Google Drive and import documents with per-file access control.
+          Connect Google Drive and import documents directly into your workspace departments with per-file access control.
         </p>
         {!connected && !user?.is_owner && !user?.permissions?.includes("drive:connect") && (
           <p className="mt-2 text-sm text-slate">
@@ -332,9 +431,50 @@ export default function Integrations() {
           <div>
             <p className="mb-4 rounded-md border border-hairline bg-paper-raised p-3 text-xs text-slate">
               EKIP requests read-only access to files in your Google Drive. Imports are limited to
-              files and folders you select here, but Google’s authorization scope itself is broader
-              than those selections. You can disconnect EKIP or revoke access in your Google Account.
+              files and folders you select here, and are organized by department. You can disconnect EKIP or revoke access in your Google Account.
             </p>
+
+            {/* Department Selection Section */}
+            <div className="mb-4 rounded-lg border border-hairline bg-paper-raised/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="drive-dept-select" className="text-xs font-medium text-ink-soft">
+                    Default department for imports:
+                  </label>
+                  {departments.length === 0 ? (
+                    <span className="text-xs text-danger">No departments found.</span>
+                  ) : (
+                    <select
+                      id="drive-dept-select"
+                      value={selectedDepartmentId}
+                      onChange={(e) => setSelectedDepartmentId(e.target.value)}
+                      className="rounded-md border border-hairline bg-paper px-3 py-1.5 text-xs font-medium text-ink focus:border-index focus:outline-none"
+                    >
+                      {departments.map((dept) => (
+                        <option key={dept.id} value={dept.id}>
+                          {dept.name} {dept.workspace?.name ? `(${dept.workspace.name})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {canManageDepts && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="text-xs py-1 px-2.5"
+                    onClick={() => {
+                      setCreateDeptError("");
+                      setShowCreateDeptModal(true);
+                    }}
+                  >
+                    + Create department
+                  </Button>
+                )}
+              </div>
+            </div>
+
             <h3 className="mb-3 font-medium text-ink">Browse and select Drive items</h3>
             <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
               <button
@@ -357,11 +497,14 @@ export default function Integrations() {
                 </span>
               ))}
             </div>
+
             {driveFiles.length + driveFolders.length > 0 ? (
               <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
                 {[...driveFolders.map((folder) => ({ ...folder, is_folder: true })), ...driveFiles].map((item) => {
                   const checked = Boolean(selectedFiles[item.id]);
                   const selectedRoles = fileRoles[item.id] ?? [user.role_id];
+                  const itemDept = itemDepartments[item.id] || selectedDepartmentId;
+
                   return (
                     <div key={item.id} className="rounded-md border border-hairline p-3">
                       <div className="flex items-center gap-2">
@@ -392,16 +535,48 @@ export default function Integrations() {
                       </div>
 
                       {checked && (
-                        <RoleSelector
-                          filename={item.name}
-                          selected={selectedRoles}
-                          roles={roles}
-                          ownRoleId={user.role_id}
-                          canManageAccess={canManageAccess}
-                          onChange={(next) =>
-                            setFileRoles((prev) => ({ ...prev, [item.id]: next }))
-                          }
-                        />
+                        <div className="mt-3 space-y-2.5 border-t border-hairline pt-2.5">
+                          {/* Department mapping for this specific folder/file */}
+                          {departments.length > 1 && (
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <span className="font-medium text-ink-soft">
+                                {item.is_folder ? "Folder Department:" : "Department:"}
+                              </span>
+                              <select
+                                value={itemDept}
+                                onChange={(e) =>
+                                  setItemDepartments((prev) => ({
+                                    ...prev,
+                                    [item.id]: e.target.value,
+                                  }))
+                                }
+                                className="rounded border border-hairline bg-paper px-2 py-1 text-xs text-ink focus:border-index focus:outline-none"
+                              >
+                                {departments.map((dept) => (
+                                  <option key={dept.id} value={dept.id}>
+                                    {dept.name}
+                                  </option>
+                                ))}
+                              </select>
+                              {item.is_folder && (
+                                <span className="text-[11px] text-slate-light">
+                                  (files in folder inherit this department)
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          <RoleSelector
+                            filename={item.name}
+                            selected={selectedRoles}
+                            roles={roles}
+                            ownRoleId={user.role_id}
+                            canManageAccess={canManageAccess}
+                            onChange={(next) =>
+                              setFileRoles((prev) => ({ ...prev, [item.id]: next }))
+                            }
+                          />
+                        </div>
                       )}
                     </div>
                   );
@@ -420,11 +595,13 @@ export default function Integrations() {
                 variant="secondary"
                 className="mt-3 w-full"
                 disabled={loadingFiles}
-                onClick={() => loadItems(
-                  folderStack.at(-1)?.id ?? null,
-                  undefined,
-                  folderPageToken
-                )}
+                onClick={() =>
+                  loadItems(
+                    folderStack.at(-1)?.id ?? null,
+                    undefined,
+                    folderPageToken
+                  )
+                }
               >
                 {loadingFiles ? "Loading…" : "Load more folders"}
               </Button>
@@ -434,11 +611,13 @@ export default function Integrations() {
                 variant="secondary"
                 className="mt-3 w-full"
                 disabled={loadingFiles}
-                onClick={() => loadItems(
-                  folderStack.at(-1)?.id ?? null,
-                  filePageToken,
-                  undefined
-                )}
+                onClick={() =>
+                  loadItems(
+                    folderStack.at(-1)?.id ?? null,
+                    filePageToken,
+                    undefined
+                  )
+                }
               >
                 {loadingFiles ? "Loading…" : "Load more"}
               </Button>
@@ -494,6 +673,84 @@ export default function Integrations() {
             </div>
           ))}
         </Card>
+      )}
+
+      {/* Create Department Modal */}
+      {showCreateDeptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <Card className="flex w-full max-w-md flex-col gap-4 p-6 shadow-xl">
+            <div className="border-b border-hairline pb-2">
+              <h2 className="font-display text-lg text-ink">Create new department</h2>
+              <p className="text-xs text-slate">
+                Add a department to organize imported Google Drive files.
+              </p>
+            </div>
+
+            <form onSubmit={handleCreateDepartment} className="flex flex-col gap-4">
+              {workspaces.length > 1 && (
+                <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                  Workspace
+                  <select
+                    value={newDeptWsId}
+                    onChange={(e) => setNewDeptWsId(e.target.value)}
+                    className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none"
+                  >
+                    {workspaces.map((ws) => (
+                      <option key={ws.id} value={ws.id}>
+                        {ws.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                Department name
+                <input
+                  required
+                  maxLength={80}
+                  value={newDeptName}
+                  onChange={(e) => setNewDeptName(e.target.value)}
+                  placeholder="e.g. Legal, Engineering, Marketing"
+                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none"
+                  autoFocus
+                />
+              </label>
+
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
+                Description (optional)
+                <textarea
+                  rows={2}
+                  maxLength={240}
+                  value={newDeptDesc}
+                  onChange={(e) => setNewDeptDesc(e.target.value)}
+                  placeholder="Brief summary of department responsibilities..."
+                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none resize-none"
+                />
+              </label>
+
+              {createDeptError && (
+                <p role="alert" className="text-xs text-danger">
+                  {createDeptError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={creatingDept}
+                  onClick={() => setShowCreateDeptModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={creatingDept || !newDeptName.trim()}>
+                  {creatingDept ? "Creating…" : "Create & select"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
       )}
     </div>
   );
