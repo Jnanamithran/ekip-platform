@@ -361,6 +361,7 @@ async def ingest(
 
     try:
         visual_indexed = False
+
         async def update_document(stage: str, progress: int, chunk_count=None):
             details = {'stage': stage, 'progress': progress}
             if chunk_count is not None:
