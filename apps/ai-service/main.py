@@ -55,6 +55,7 @@ def health():
 VISUAL_COLLECTION = "ekip_visual_documents"
 VISUAL_SERVICE_URL = os.getenv("VISUAL_SERVICE_URL", "http://ai-service-visual:8001")
 AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "")
+VISUAL_ASK_TIMEOUT = float(os.getenv("VISUAL_ASK_TIMEOUT", "300"))
 
 
 async def require_backend_service_key(x_ekip_service_key: str | None = Header(default=None)):
@@ -230,7 +231,7 @@ async def run_text_pipeline(query: str, rbac: RBACContext, token: str, request_i
 async def run_visual_pipeline(question: str, rbac_dict: dict) -> dict:
     """Ask the visual service and normalize its citations to CitationOut shape."""
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=VISUAL_ASK_TIMEOUT) as client:
         response = await client.post(
             f'{VISUAL_SERVICE_URL}/visual/ask',
             headers={'x-ekip-service-key': AI_SERVICE_API_KEY},
@@ -312,7 +313,7 @@ async def ask(req: AskRequest, _service_key: None = Depends(require_backend_serv
         'allowed_role_ids': allowed_role_ids,
     }
 
-    visual_available = has_visual_docs(rbac_dict)
+    visual_available = await asyncio.to_thread(has_visual_docs, rbac_dict)
 
     if visual_available:
         # Run text and visual in parallel, merge citations

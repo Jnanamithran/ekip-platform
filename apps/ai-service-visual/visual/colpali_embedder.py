@@ -32,6 +32,7 @@ from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue, MatchAny, PayloadSchemaType,
 )
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 # ── Config ────────────────────────────────────────────────────────────────────
 VISUAL_COLLECTION = "ekip_visual_documents"
@@ -220,14 +221,22 @@ def search_visual(
         ])
     rbac_filter = Filter(must=conditions)
 
-    hits = client.search(
-        collection_name = VISUAL_COLLECTION,
-        query_vector    = query_vector,
-        query_filter    = rbac_filter,
-        limit           = top_k,
-        with_payload    = True,
-    )
+    try:
+        response = client.query_points(
+            collection_name = VISUAL_COLLECTION,
+            query           = query_vector,
+            query_filter    = rbac_filter,
+            limit           = top_k,
+            with_payload    = True,
+        )
+    except UnexpectedResponse as exc:
+        if getattr(exc, "status_code", None) == 404:
+            return []
+        raise
+    except ValueError:
+        return []
 
+    hits = response.points
     return [
         {
             "document_id": hit.payload.get("document_id"),

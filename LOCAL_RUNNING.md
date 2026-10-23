@@ -115,6 +115,8 @@ AI_SERVICE_API_KEY=generate-a-random-shared-service-key
 QDRANT_URL=http://localhost:6333
 OLLAMA_URL=http://localhost:11434
 BACKEND_URL=http://localhost:5000
+VISUAL_SERVICE_URL=http://localhost:8001
+VISUAL_ASK_TIMEOUT=300
 ```
 
 ### Frontend `apps/frontend/.env`
@@ -134,8 +136,14 @@ If you run the visual service, create its env file with at least:
 ```dotenv
 AI_SERVICE_API_KEY=generate-a-random-shared-service-key
 QDRANT_URL=http://localhost:6333
-VISUAL_SERVICE_URL=http://localhost:8001
+VISUAL_STORAGE=d:/Program/ekip-platform/apps/backend/uploads/visual
+COLPALI_MODEL=vidore/colpali-v1.2
+QWEN_MODEL=Qwen/Qwen2-VL-7B-Instruct
 ```
+
+> **Storage sharing:** the backend serves page images from
+> `UPLOAD_STORAGE_DIR/visual/...`. Keep `VISUAL_STORAGE` pointing at the
+> same directory (the default `uploads/visual` only matches in Docker).
 
 ## 3. PostgreSQL
 
@@ -439,4 +447,44 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 - **Ollama errors**: ensure `ollama serve` is running and `llama3.2:3b` is pulled.
 - **Prisma migration errors**: verify PostgreSQL is running and `DATABASE_URL` is correct.
 - **Frontend cannot reach backend**: verify `VITE_API_URL` and backend `FRONTEND_ORIGINS`.
+
+---
+
+## 17. Verified local run (no Docker)
+
+The following commands were verified on this machine:
+
+### Services
+```powershell
+# Text AI service
+cd d:\Program\ekip-platform\apps\ai-service
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+# Visual AI service
+cd d:\Program\ekip-platform\apps\ai-service-visual
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8001
+```
+
+### Health checks
+```powershell
+curl.exe -s http://localhost:8000/health
+curl.exe -s http://localhost:8001/health
+```
+
+### Tests
+```powershell
+cd d:\Program\ekip-platform\apps\ai-service
+.\.venv\Scripts\python.exe -m pytest -q
+
+cd d:\Program\ekip-platform\apps\ai-service-visual
+.\.venv\Scripts\python.exe -m pytest -q
+```
+Visual service tests: **18 passed**. Text AI service tests: **39 passed**.
+
+### Visual ingest (ColPali)
+```powershell
+cd d:\Program\ekip-platform
+.\apps\ai-service-visual\.venv\Scripts\python.exe -c "import httpx,json,uuid; rbac={'org_id':'org-1','workspace_id':'workspace-1','department_id':'department-1','allowed_role_ids':['role-1'],'uploaded_by':'user-1'}; doc_id=str(uuid.uuid4()); files={'file':('test.pdf',open('apps/ai-service/tests/fixtures/test.pdf','rb'),'application/pdf')}; data={'rbac':json.dumps(rbac),'document_id':doc_id}; h={'x-ekip-service-key':'<AI_SERVICE_API_KEY>'}; r=httpx.Client(timeout=300).post('http://localhost:8001/visual/ingest',data=data,files=files,headers=h); print(r.status_code); print(r.text)"
+```
+Expected: HTTP 200 with `pages_upserted` (3 for the bundled test PDF) and `pipeline: visual`.
 
