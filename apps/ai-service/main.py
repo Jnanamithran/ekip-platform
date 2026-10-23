@@ -1,4 +1,19 @@
 import os
+
+# Auto-load apps/ai-service/.env if present (uvicorn does not load .env by itself).
+_env_file = os.path.join(os.path.dirname(__file__), ".env")
+if os.path.exists(_env_file):
+    with open(_env_file, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _key, _sep, _val = _line.partition("=")
+            _key = _key.strip()
+            _val = _val.strip()
+            if _key and _key not in os.environ:
+                os.environ[_key] = _val
+
 import json
 import secrets
 import tempfile
