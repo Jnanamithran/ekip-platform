@@ -123,6 +123,9 @@ docker compose ps
   and recovery, and independent security review are not complete.
 - The current user model grants access within one workspace. Additional
   department grants do not grant access to another workspace.
+- Department-scoped roles are limited to their department. Document access
+  requires both access to the document's department and a matching allowed
+  role, except for the organization Owner, who has protected Owner access.
 - Scanned-PDF visual processing requires the optional visual model stack and
   substantial compute resources. Text extraction/OCR behavior depends on the
   document and installed model/runtime support.
@@ -130,7 +133,9 @@ docker compose ps
   supported.
 - Google Drive import uses EKIP role-based permissions; you can import
   individual files or entire folders and choose which organization roles can
-  search each imported file. It does not preserve Drive sharing permissions.
+  search each imported file. Organization-wide roles and roles matching each
+  item's target department are offered. It does not preserve Drive sharing
+  permissions.
 - PDF preview requires the original file to be retained. Other supported
   formats provide text citations, not PDF previews.
 ## Tests and checks
@@ -207,10 +212,16 @@ Google Drive OAuth is optional and requires a Google OAuth client. See
 4. Review source citations. PDF page previews are available when an original
    PDF is retained.
 5. Members whose role grants the relevant permissions can review workspace
-   settings and manage users. Create additional custom roles (and choose what
-   each can do) from the Manage Roles page. The backend also provides a Google
-   Drive integration; connect Drive, then import individual files or whole
-   folders from the Integrations page.
+   settings and manage users. Create custom roles from the Manage Roles page;
+   each role can be organization-wide or limited to one department.
+6. When uploading or importing documents, choose the target department and
+   allowed roles. The role picker offers organization-wide roles and
+   department-specific roles belonging to the selected department. The
+   backend validates this match as well. The protected Owner role is always
+   included in document access selections and cannot be unchecked.
+7. Connect Google Drive from Integrations to import individual files or
+   folders. Each selected item can have its own department and matching role
+   access.
 ## Run everything locally without Docker
 
 Use the step-by-step Windows [local running guide](LOCAL_RUNNING.md) as the

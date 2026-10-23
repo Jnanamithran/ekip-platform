@@ -278,14 +278,18 @@ async function ingestDocument({
   allowedRoleIds,
   departmentId,
 }) {
-  const access = await validateAllowedRoleIds(prisma, allowedRoleIds, user);
-  if (access.error) return { status: 400, body: { error: access.error } };
-
   const department = await validateDocumentDepartment(prisma, user, departmentId);
   if (department.error) {
     return { status: department.status, body: { error: department.error } };
   }
   const targetDepartmentId = department.departmentId;
+  const access = await validateAllowedRoleIds(
+    prisma,
+    allowedRoleIds,
+    user,
+    targetDepartmentId
+  );
+  if (access.error) return { status: 400, body: { error: access.error } };
 
   const documentId = randomUUID();
   let documentCreated = false;
@@ -480,8 +484,6 @@ async function updateDocumentAccess(req, res) {
     if (document.status === 'Processing') {
       return res.status(409).json({ error: 'Wait for processing to finish before changing access' });
     }
-    const access = await validateAllowedRoleIds(prisma, allowedRoleIds, req.user);
-    if (access.error) return res.status(400).json({ error: access.error });
     let targetDepartmentId = document.department_id;
     if (req.body?.department_id !== undefined) {
       const department = await validateDocumentDepartment(
@@ -494,6 +496,13 @@ async function updateDocumentAccess(req, res) {
       }
       targetDepartmentId = department.departmentId;
     }
+    const access = await validateAllowedRoleIds(
+      prisma,
+      allowedRoleIds,
+      req.user,
+      targetDepartmentId
+    );
+    if (access.error) return res.status(400).json({ error: access.error });
 
     for (const collection of ['ekip_documents', 'ekip_visual_documents']) {
       await setDocumentVectorAccess(collection, id, req.user.org_id, []);

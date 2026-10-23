@@ -32,7 +32,14 @@ function formatModifiedTime(value) {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
 }
 
-function RoleSelector({ filename, selected, onChange, roles, ownRoleId, canManageAccess }) {
+function RoleSelector({
+  filename,
+  selected,
+  onChange,
+  roles,
+  ownRoleId,
+  canManageAccess,
+}) {
   function toggle(roleId) {
     const next = selected.includes(roleId)
       ? selected.filter((id) => id !== roleId)
@@ -58,6 +65,11 @@ function RoleSelector({ filename, selected, onChange, roles, ownRoleId, canManag
             {role.name}
           </label>
         ))}
+        {roles.length === 0 && (
+          <p className="text-xs text-slate">
+            No organization-wide or department-specific roles are available for this department.
+          </p>
+        )}
       </div>
       {selected.length === 0 && (
         <p role="alert" className="mt-1 text-xs text-danger">
@@ -190,13 +202,17 @@ export default function Integrations() {
         if (isConnected) {
           const roleRequest =
             user?.is_owner || user?.permissions?.includes("documents:manage_access")
-              ? getOrganizationRoles().then((result) => setRoles(result.roles ?? []))
+              ? getOrganizationRoles().then((result) =>
+                  setRoles((result.roles ?? []).filter((role) => !role.scope_review_required))
+                )
               : Promise.resolve(
                   setRoles([
                     {
                       id: user.role_id,
                       name: user.role,
                       is_owner: user.is_owner,
+                      scope: user.role_scope,
+                      department_id: user.role_department_id,
                     },
                   ])
                 );
@@ -247,14 +263,29 @@ export default function Integrations() {
 
   const canManageAccess =
     Boolean(user?.is_owner) || user?.permissions?.includes("documents:manage_access");
+  function getRolesForDepartment(departmentId) {
+    return roles.filter(
+      (role) => role.scope !== "department" || role.department_id === departmentId
+    );
+  }
+
+  function getSelectedRolesForFile(fileId) {
+    const departmentId = itemDepartments[fileId] || selectedDepartmentId;
+    const availableRoleIds = new Set(
+      getRolesForDepartment(departmentId).map((role) => role.id)
+    );
+    return (fileRoles[fileId] ?? [user?.role_id]).filter((roleId) =>
+      availableRoleIds.has(roleId)
+    );
+  }
+
   const ownRoleMissing = Object.entries(selectedFiles).some(
     ([fileId, selected]) =>
-      selected &&
-      !(fileRoles[fileId] ?? [user?.role_id]).includes(user?.role_id)
+      selected && !getSelectedRolesForFile(fileId).includes(user?.role_id)
   );
   const emptyRoles = Object.entries(selectedFiles).some(
     ([fileId, selected]) =>
-      selected && !(fileRoles[fileId] ?? [user?.role_id]).length
+      selected && !getSelectedRolesForFile(fileId).length
   );
   const selectedEntries = Object.entries(selectedFiles).filter(([, selected]) => selected);
   const importDisabled =
@@ -345,7 +376,7 @@ export default function Integrations() {
     const files = selectedEntries.map(([fileId]) => ({
       file_id: fileId,
       is_folder: selectedFolderIds.includes(fileId),
-      allowed_role_ids: fileRoles[fileId] ?? [user.role_id],
+      allowed_role_ids: getSelectedRolesForFile(fileId),
       department_id: itemDepartments[fileId] || selectedDepartmentId || undefined,
     }));
 
@@ -502,8 +533,9 @@ export default function Integrations() {
               <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
                 {[...driveFolders.map((folder) => ({ ...folder, is_folder: true })), ...driveFiles].map((item) => {
                   const checked = Boolean(selectedFiles[item.id]);
-                  const selectedRoles = fileRoles[item.id] ?? [user.role_id];
                   const itemDept = itemDepartments[item.id] || selectedDepartmentId;
+                  const availableItemRoles = getRolesForDepartment(itemDept);
+                  const selectedRoles = getSelectedRolesForFile(item.id);
 
                   return (
                     <div key={item.id} className="rounded-md border border-hairline p-3">
@@ -544,12 +576,28 @@ export default function Integrations() {
                               </span>
                               <select
                                 value={itemDept}
-                                onChange={(e) =>
-                                  setItemDepartments((prev) => ({
-                                    ...prev,
-                                    [item.id]: e.target.value,
-                                  }))
-                                }
+                                onChange={(event) => {
+                                  const departmentId = event.target.value;
+                                  const allowedRoleIds = new Set(
+                                    roles
+                                      .filter(
+                                        (role) =>
+                                          role.scope !== "department" ||
+                                          role.department_id === departmentId
+                                      )
+                                      .map((role) => role.id)
+                                  );
+                                  setItemDepartments((previous) => ({
+                                    ...previous,
+                                    [item.id]: departmentId,
+                                  }));
+                                  setFileRoles((previous) => ({
+                                    ...previous,
+                                    [item.id]: (previous[item.id] ?? [user.role_id]).filter(
+                                      (roleId) => allowedRoleIds.has(roleId)
+                                    ),
+                                  }));
+                                }}
                                 className="rounded border border-hairline bg-paper px-2 py-1 text-xs text-ink focus:border-index focus:outline-none"
                               >
                                 {departments.map((dept) => (
@@ -569,7 +617,7 @@ export default function Integrations() {
                           <RoleSelector
                             filename={item.name}
                             selected={selectedRoles}
-                            roles={roles}
+                            roles={availableItemRoles}
                             ownRoleId={user.role_id}
                             canManageAccess={canManageAccess}
                             onChange={(next) =>

@@ -61,7 +61,7 @@ router.delete(
 );
 router.get(
   '/departments',
-  requireAnyPermission('departments:manage', 'workspace:manage', 'users:manage'),
+  requireAnyPermission('departments:manage', 'workspace:manage', 'users:manage', 'roles:manage'),
   listDepartments
 );
 

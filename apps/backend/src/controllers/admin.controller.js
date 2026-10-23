@@ -6,15 +6,39 @@ const { PERMISSIONS } = require('../utils/permissions');
 const prisma = new PrismaClient();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function manageableDepartmentIds(user) {
+  if (user.is_owner || user.role_scope !== 'department') return null;
+  return [...new Set([
+    user.role_department_id,
+    ...(user.authorized_department_ids || []),
+  ].filter(Boolean))];
+}
+
 // Finds a member only inside the caller's workspace.
-function findUserInWorkspace(id, workspaceId) {
+function findUserInWorkspace(id, user) {
+  const departmentIds = manageableDepartmentIds(user);
   return prisma.user.findFirst({
-    where: { id, department: { workspace_id: workspaceId } },
+    where: {
+      id,
+      department: {
+        workspace_id: user.workspace_id,
+        ...(departmentIds && { id: { in: departmentIds } }),
+      },
+    },
     select: {
       id: true,
       email: true,
       role_id: true,
-      role: { select: { id: true, name: true, is_owner: true, permissions: true } },
+      role: {
+        select: {
+          id: true,
+          name: true,
+          is_owner: true,
+          permissions: true,
+          scope: true,
+          department_id: true,
+        },
+      },
       department_id: true,
       active: true,
     },
@@ -27,9 +51,45 @@ function permissionsWithinActor(permissions, req) {
 
 async function findAssignableRole(roleId, orgId) {
   return prisma.organizationRole.findFirst({
-    where: { id: roleId, org_id: orgId, is_owner: false },
-    select: { id: true, name: true, permissions: true },
+    where: {
+      id: roleId,
+      org_id: orgId,
+      is_owner: false,
+      scope_review_required: false,
+    },
+    select: {
+      id: true,
+      name: true,
+      permissions: true,
+      scope: true,
+      department_id: true,
+    },
   });
+}
+
+function validateRoleAssignment(role, departmentId, req) {
+  if (role.scope !== 'department') return null;
+  if (role.department_id !== departmentId) {
+    return 'A department-scoped role can only be assigned to a user in its department';
+  }
+  if (
+    !req.user.is_owner &&
+    (
+      !req.user.permissions.includes('departments:manage') ||
+      !(req.user.department_ids || [req.user.department_id]).includes(role.department_id)
+    )
+  ) {
+    return 'You need department-management access to assign a role for that department';
+  }
+  return null;
+}
+
+function validateManagedDepartment(departmentId, req) {
+  const departmentIds = manageableDepartmentIds(req.user);
+  if (departmentIds && !departmentIds.includes(departmentId)) {
+    return 'You cannot manage users outside your department scope';
+  }
+  return null;
 }
 
 async function isOrganizationOwner(userId, orgId) {
@@ -67,9 +127,13 @@ async function createUser(req, res) {
     if (!department) {
       return res.status(404).json({ error: 'Department not found' });
     }
+    const departmentAccessError = validateManagedDepartment(department.id, req);
+    if (departmentAccessError) return res.status(403).json({ error: departmentAccessError });
     if (!role) {
       return res.status(404).json({ error: 'Role not found' });
     }
+    const assignmentError = validateRoleAssignment(role, department.id, req);
+    if (assignmentError) return res.status(403).json({ error: assignmentError });
     if (!permissionsWithinActor(role.permissions, req)) {
       return res.status(403).json({ error: 'You cannot assign a role with permissions you do not have' });
     }
@@ -80,6 +144,12 @@ async function createUser(req, res) {
         return res.status(400).json({ error: 'additional_department_ids must be an array of department IDs' });
       }
       normalizedAdditionalIds = [...new Set(additionalDepartmentIds.filter((id) => id !== departmentId))];
+      const inaccessibleDepartment = normalizedAdditionalIds.find(
+        (id) => validateManagedDepartment(id, req)
+      );
+      if (inaccessibleDepartment) {
+        return res.status(403).json({ error: 'You cannot grant access to departments outside your scope' });
+      }
       if (normalizedAdditionalIds.length) {
         const validDepartments = await prisma.department.findMany({
           where: { id: { in: normalizedAdditionalIds }, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
@@ -120,6 +190,8 @@ async function createUser(req, res) {
         additional_department_ids: user.authorized_departments.map((grant) => grant.department_id),
         role: role.name,
         role_is_owner: false,
+        role_scope: role.scope,
+        role_department_id: role.department_id,
       },
     });
   } catch (err) {
@@ -143,9 +215,14 @@ async function listUsers(req, res) {
 
     // The org filter always comes from the token, never from the request.
     // The other filters only narrow the result inside that org.
+    const manageableDepartments = manageableDepartmentIds(req.user);
     const where = {
       department: { workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
-      ...(departmentId && { department_id: departmentId }),
+      ...(manageableDepartments
+        ? { department_id: { in: departmentId
+          ? manageableDepartments.filter((id) => id === departmentId)
+          : manageableDepartments } }
+        : departmentId && { department_id: departmentId }),
       ...(roleId && { role_id: roleId }),
     };
 
@@ -156,7 +233,16 @@ async function listUsers(req, res) {
           id: true,
           email: true,
           role_id: true,
-          role: { select: { id: true, name: true, is_owner: true } },
+          role: {
+            select: {
+              id: true,
+              name: true,
+              is_owner: true,
+              scope: true,
+              department_id: true,
+              department: { select: { name: true } },
+            },
+          },
           department_id: true,
           authorized_departments: { select: { department_id: true, department: { select: { name: true } } } },
           active: true,
@@ -178,6 +264,9 @@ async function listUsers(req, res) {
         })),
         role: role.name,
         role_is_owner: role.is_owner,
+        role_scope: role.scope,
+        role_department_id: role.department_id,
+        role_department: role.department?.name ?? null,
       })),
       total,
       limit,
@@ -325,7 +414,7 @@ async function updateWorkspace(req, res) {
 // PATCH /admin/users/:id
 async function updateUser(req, res) {
   try {
-    const target = await findUserInWorkspace(req.params.id, req.user.workspace_id);
+    const target = await findUserInWorkspace(req.params.id, req.user);
     if (!target) return res.status(404).json({ error: 'User not found' });
 
     if (await isOrganizationOwner(target.id, req.user.org_id)) {
@@ -342,12 +431,14 @@ async function updateUser(req, res) {
       data.email = email.trim().toLowerCase();
     }
 
+    let nextRole = target.role;
     if (roleId !== undefined) {
       if (target.id === req.user.user_id) {
         return res.status(400).json({ error: 'You cannot change your own role' });
       }
       const role = await findAssignableRole(roleId, req.user.org_id);
       if (!role) return res.status(404).json({ error: 'Role not found' });
+      nextRole = role;
       if (!permissionsWithinActor(role.permissions, req)) {
         return res.status(403).json({ error: 'You cannot assign a role with permissions you do not have' });
       }
@@ -359,9 +450,18 @@ async function updateUser(req, res) {
         where: { id: departmentId, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
       });
       if (!dept) return res.status(404).json({ error: 'Department not found' });
+      const departmentAccessError = validateManagedDepartment(dept.id, req);
+      if (departmentAccessError) return res.status(403).json({ error: departmentAccessError });
       data.department_id = departmentId;
       data.authorized_departments = { deleteMany: { department_id: departmentId } };
     }
+
+    const assignmentError = validateRoleAssignment(
+      nextRole,
+      departmentId !== undefined ? departmentId : target.department_id,
+      req
+    );
+    if (assignmentError) return res.status(403).json({ error: assignmentError });
 
     if (additionalDepartmentIds !== undefined) {
       if (!Array.isArray(additionalDepartmentIds) || additionalDepartmentIds.some((id) => typeof id !== 'string' || !id)) {
@@ -369,6 +469,12 @@ async function updateUser(req, res) {
       }
       const primaryDepartmentId = departmentId !== undefined ? departmentId : target.department_id;
       const normalizedAdditionalIds = [...new Set(additionalDepartmentIds.filter((id) => id !== primaryDepartmentId))];
+      const inaccessibleDepartment = normalizedAdditionalIds.find(
+        (id) => validateManagedDepartment(id, req)
+      );
+      if (inaccessibleDepartment) {
+        return res.status(403).json({ error: 'You cannot grant access to departments outside your scope' });
+      }
       if (normalizedAdditionalIds.length) {
         const validDepartments = await prisma.department.findMany({
           where: { id: { in: normalizedAdditionalIds }, workspace: { id: req.user.workspace_id, org_id: req.user.org_id } },
@@ -395,7 +501,16 @@ async function updateUser(req, res) {
         id: true,
         email: true,
         role_id: true,
-        role: { select: { id: true, name: true, is_owner: true } },
+        role: {
+          select: {
+            id: true,
+            name: true,
+            is_owner: true,
+            scope: true,
+            department_id: true,
+            department: { select: { name: true } },
+          },
+        },
         department_id: true,
         authorized_departments: { select: { department_id: true } },
         active: true,
@@ -407,6 +522,9 @@ async function updateUser(req, res) {
         additional_department_ids: (user.authorized_departments || []).map((grant) => grant.department_id),
         role: user.role.name,
         role_is_owner: user.role.is_owner,
+        role_scope: user.role.scope,
+        role_department_id: user.role.department_id,
+        role_department: user.role.department?.name ?? null,
       },
     });
   } catch (err) {
@@ -421,7 +539,7 @@ async function updateUser(req, res) {
 // POST /admin/users/:id/reset-password  (Admin only)
 async function resetPassword(req, res) {
   try {
-    const target = await findUserInWorkspace(req.params.id, req.user.workspace_id);
+    const target = await findUserInWorkspace(req.params.id, req.user);
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (
       target.role.is_owner ||
@@ -456,7 +574,7 @@ async function resetPassword(req, res) {
 // Shared by deactivate and reactivate
 async function setActive(req, res, active) {
   try {
-    const target = await findUserInWorkspace(req.params.id, req.user.workspace_id);
+    const target = await findUserInWorkspace(req.params.id, req.user);
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (
       target.role.is_owner ||
@@ -499,7 +617,14 @@ async function queryAnalytics(req, res) {
     // History rows only store user_id, so find this organization's users first.
     // The org comes from the token, never from the request.
     const users = await prisma.user.findMany({
-      where: { department: { workspace: { org_id: req.user.org_id } } },
+      where: {
+        department: {
+          workspace: { org_id: req.user.org_id },
+          ...(manageableDepartmentIds(req.user) && {
+            id: { in: manageableDepartmentIds(req.user) },
+          }),
+        },
+      },
       select: { id: true },
     });
     const userIds = users.map((u) => u.id);
@@ -536,9 +661,11 @@ async function queryAnalytics(req, res) {
 async function listDepartments(req, res) {
   try {
     const { workspace_id: workspaceId } = req.query;
+    const departmentIds = manageableDepartmentIds(req.user);
     const departments = await prisma.department.findMany({
       where: {
         workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
+        ...(departmentIds && { id: { in: departmentIds } }),
         ...(workspaceId && { workspace_id: workspaceId }),
       },
       select: {
@@ -582,6 +709,9 @@ async function getDepartment(req, res) {
       where: {
         id: departmentId,
         workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
+        ...(manageableDepartmentIds(req.user) && {
+          id: { in: manageableDepartmentIds(req.user) },
+        }),
       },
       select: {
         id: true,
@@ -620,6 +750,9 @@ async function getDepartment(req, res) {
 // POST /admin/departments
 async function createDepartment(req, res) {
   try {
+    if (req.user.role_scope === 'department' && !req.user.is_owner) {
+      return res.status(403).json({ error: 'Department-scoped roles cannot create departments' });
+    }
     const { workspace_id, name, description } = req.body || {};
 
     if (typeof name !== 'string' || !name.trim()) {
@@ -681,6 +814,9 @@ async function updateDepartment(req, res) {
       where: {
         id: departmentId,
         workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
+        ...(manageableDepartmentIds(req.user) && {
+          id: { in: manageableDepartmentIds(req.user) },
+        }),
       },
       select: { id: true, name: true, is_default: true },
     });
@@ -743,6 +879,9 @@ async function deleteDepartment(req, res) {
       where: {
         id: departmentId,
         workspace: { id: req.user.workspace_id, org_id: req.user.org_id },
+        ...(manageableDepartmentIds(req.user) && {
+          id: { in: manageableDepartmentIds(req.user) },
+        }),
       },
       select: { id: true, name: true, is_default: true },
     });
@@ -757,19 +896,21 @@ async function deleteDepartment(req, res) {
       });
     }
 
-    const [userCount, documentCount, authorizedUserCount] = await Promise.all([
+    const [userCount, documentCount, authorizedUserCount, roleCount] = await Promise.all([
       prisma.user.count({ where: { department_id: departmentId } }),
       prisma.document.count({ where: { department_id: departmentId } }),
       prisma.userAuthorizedDepartment.count({ where: { department_id: departmentId } }),
+      prisma.organizationRole.count({ where: { department_id: departmentId } }),
     ]);
 
-    if (userCount > 0 || documentCount > 0 || authorizedUserCount > 0) {
-      return res.status(400).json({
-        error: "Cannot delete a department with assigned users (" + userCount + "), additional access grants (" + authorizedUserCount + "), or documents (" + documentCount + "). Reassign them first.",
+    if (userCount > 0 || documentCount > 0 || authorizedUserCount > 0 || roleCount > 0) {
+      return res.status(409).json({
+        error: "Cannot delete a department with assigned users (" + userCount + "), additional access grants (" + authorizedUserCount + "), roles (" + roleCount + "), or documents (" + documentCount + "). Reassign them first.",
         code: 'DEPARTMENT_HAS_RECORDS',
         userCount,
         documentCount,
         authorizedUserCount,
+        roleCount,
       });
     }
 

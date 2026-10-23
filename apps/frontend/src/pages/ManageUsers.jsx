@@ -43,12 +43,29 @@ export default function ManageUsers() {
     (id) => departments.find((d) => d.id === id)?.name ?? id,
     [departments]
   );
-  const assignableRoles = roles.filter(
-    (role) =>
-      !role.is_owner &&
-      (currentUser?.is_owner ||
-        role.permissions.every((permission) => currentUser?.permissions?.includes(permission)))
-  );
+  const manageableDepartments = departments.filter((department) => (
+    currentUser?.is_owner ||
+    currentUser?.role_scope !== "department" ||
+    department.id === currentUser?.role_department_id ||
+    currentUser?.department_ids?.includes(department.id)
+  ));
+  function assignableRolesForDepartment(departmentId) {
+    return roles.filter((role) => {
+      if (
+        role.is_owner ||
+        (!currentUser?.is_owner &&
+          !role.permissions.every((permission) => currentUser?.permissions?.includes(permission)))
+      ) return false;
+      if (role.scope !== "department") return true;
+      return role.department_id === departmentId && (
+        currentUser?.is_owner ||
+        (currentUser?.permissions?.includes("departments:manage") &&
+          currentUser?.department_ids?.includes(role.department_id))
+      );
+    });
+  }
+
+  const assignableRoles = assignableRolesForDepartment(newUser.department_id);
 
   const load = useCallback(async () => {
     try {
@@ -62,6 +79,7 @@ export default function ManageUsers() {
         ...current,
         role_id: current.role_id || rolesData.roles.find((role) =>
           !role.is_owner &&
+          role.scope !== "department" &&
           (currentUser?.is_owner ||
             role.permissions.every((permission) => currentUser?.permissions?.includes(permission)))
         )?.id || "",
@@ -141,7 +159,7 @@ export default function ManageUsers() {
       setNewUser({
         email: "",
         password: "",
-        role_id: assignableRoles[0]?.id || "",
+        role_id: assignableRolesForDepartment("")[0]?.id || "",
         department_id: "",
         additional_department_ids: [],
       });
@@ -194,6 +212,17 @@ export default function ManageUsers() {
     }
   }
 
+  const usersByDepartment = Object.entries(
+    users.reduce((groups, managedUser) => {
+      const departmentId = managedUser.department_id || "";
+      if (!groups[departmentId]) groups[departmentId] = [];
+      groups[departmentId].push(managedUser);
+      return groups;
+    }, {})
+  ).sort(([firstId], [secondId]) =>
+    deptName(firstId).localeCompare(deptName(secondId))
+  );
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
       <div>
@@ -235,24 +264,36 @@ export default function ManageUsers() {
           >
             <option value="">Select a role</option>
             {assignableRoles.map((role) => (
-              <option key={role.id} value={role.id}>{role.name}</option>
+              <option key={role.id} value={role.id}>
+                {role.name}{role.scope === "department" ? ` — ${deptName(role.department_id)}` : ""}
+              </option>
             ))}
           </select>
           <select
             required
             className={fieldCls}
             value={newUser.department_id}
-            onChange={(event) => setNewUser({ ...newUser, department_id: event.target.value })}
+            onChange={(event) => {
+              const department_id = event.target.value;
+              const matchingRoles = assignableRolesForDepartment(department_id);
+              setNewUser((current) => ({
+                ...current,
+                department_id,
+                role_id: matchingRoles.some((role) => role.id === current.role_id)
+                  ? current.role_id
+                  : matchingRoles[0]?.id || "",
+              }));
+            }}
           >
             <option value="">Select a department</option>
-            {departments.map((department) => (
+            {manageableDepartments.map((department) => (
               <option key={department.id} value={department.id}>{department.name}</option>
             ))}
           </select>
           <div className="sm:col-span-2">
             <p className="mb-1 text-xs text-slate">Additional departments (optional)</p>
             <div className="flex flex-wrap gap-3">
-              {departments
+              {manageableDepartments
                 .filter((department) => department.id !== newUser.department_id)
                 .map((department) => (
                   <label key={department.id} className="flex items-center gap-1.5 text-xs text-ink">
@@ -295,12 +336,20 @@ export default function ManageUsers() {
         ) : users.length === 0 ? (
           <p className="px-4 py-6 text-sm text-slate">No users found.</p>
         ) : (
-          users.map((user) => {
-            const inactive = user.active === false;
-            const busy = busyId === user.id;
-            const editing = editingId === user.id;
-            return (
-              <div key={user.id} className="flex flex-col gap-3 px-4 py-3">
+          usersByDepartment.map(([departmentId, departmentUsers]) => (
+            <section key={departmentId || "unassigned"}>
+              <h2 className="sticky top-0 border-b border-hairline bg-paper-raised px-4 py-2 text-xs font-semibold uppercase tracking-wide text-ink-soft">
+                {departmentId ? deptName(departmentId) : "Unassigned"}
+                <span className="ml-2 font-normal normal-case tracking-normal text-slate">
+                  {departmentUsers.length} {departmentUsers.length === 1 ? "user" : "users"}
+                </span>
+              </h2>
+              {departmentUsers.map((user) => {
+                const inactive = user.active === false;
+                const busy = busyId === user.id;
+                const editing = editingId === user.id;
+                return (
+                  <div key={user.id} className="flex flex-col gap-3 border-b border-hairline px-4 py-3 last:border-b-0">
                 <div className="flex items-center gap-3">
                   <Avatar name={user.email} size="sm" />
                   <div className="flex flex-1 flex-col">
@@ -312,6 +361,7 @@ export default function ManageUsers() {
                     <span className="text-xs text-slate">
                       {deptName(user.department_id)}
                       {user.additional_departments?.length ? ` + ${user.additional_departments.map((d) => d.name || deptName(d.id)).join(", ")}` : ""}
+                      {user.role_scope === "department" ? ` · ${deptName(user.role_department_id)} role` : " · Organization-wide role"}
                     </span>
                   </div>
                   {inactive && <Badge>Inactive</Badge>}
@@ -333,24 +383,36 @@ export default function ManageUsers() {
                         disabled={user.id === currentUser?.user_id}
                         onChange={(e) => setForm({ ...form, role_id: e.target.value })}
                       >
-                        {assignableRoles.map((role) => (
-                          <option key={role.id} value={role.id}>{role.name}</option>
+                        {assignableRolesForDepartment(form.department_id || user.department_id).map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.name}{role.scope === "department" ? ` — ${deptName(role.department_id)}` : ""}
+                          </option>
                         ))}
                       </select>
                       <select
                         className={`${fieldCls} flex-1`}
                         value={form.department_id}
                         onChange={(e) =>
-                          setForm({ ...form, department_id: e.target.value })
+                          setForm((current) => {
+                            const department_id = e.target.value;
+                            const matchingRoles = assignableRolesForDepartment(department_id);
+                            return {
+                              ...current,
+                              department_id,
+                              role_id: matchingRoles.some((role) => role.id === current.role_id)
+                                ? current.role_id
+                                : matchingRoles[0]?.id || "",
+                            };
+                          })
                         }
                       >
-                        {departments.map((d) => (
+                        {manageableDepartments.map((d) => (
                           <option key={d.id} value={d.id}>{d.name}</option>
                         ))}
                       </select>
                     </div>
                     <div className="flex flex-wrap gap-3 pl-1">
-                      {departments
+                      {manageableDepartments
                         .filter((department) => department.id !== (form.department_id || user.department_id))
                         .map((department) => (
                           <label key={department.id} className="flex items-center gap-1.5 text-xs text-ink">
@@ -393,9 +455,11 @@ export default function ManageUsers() {
                       </button>
                     </div>
                   ) : null}
-              </div>
-            );
-          })
+                  </div>
+                );
+              })}
+            </section>
+          ))
         )}
       </Card>
 

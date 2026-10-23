@@ -35,6 +35,7 @@ model Department {
   authorized_users UserAuthorizedDepartment[]
   users            User[]
   documents        Document[]
+  roles            OrganizationRole[]         @relation("OrganizationRoleDepartment")
 
   @@index([workspace_id])
 }
@@ -94,13 +95,18 @@ model OrganizationRole {
   name            String
   permissions     String[]             @default([])
   is_owner        Boolean              @default(false)
+  scope           String               @default("organization")
+  department_id   String?
+  scope_review_required Boolean        @default(false)
   created_at      DateTime             @default(now())
   organization    Organization         @relation(fields: [org_id], references: [id], onDelete: Cascade)
   users           User[]
   document_access DocumentRoleAccess[]
+  department      Department?          @relation("OrganizationRoleDepartment", fields: [department_id], references: [id], onDelete: Restrict)
 
-  @@unique([org_id, name])
+  @@unique([org_id, department_id, name])
   @@index([org_id])
+  @@index([department_id])
 }
 
 model DocumentRoleAccess {

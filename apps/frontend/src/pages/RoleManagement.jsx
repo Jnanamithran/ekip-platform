@@ -4,12 +4,19 @@ import {
   createOrganizationRole,
   deleteOrganizationRole,
   getOrganizationRoles,
+  getDepartments,
   updateOrganizationRole,
 } from "../lib/apiClient";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 
-const emptyDraft = { id: null, name: "", permissions: [] };
+const emptyDraft = {
+  id: null,
+  name: "",
+  permissions: [],
+  scope: "organization",
+  department_id: "",
+};
 
 const PERMISSION_DETAILS = {
   "documents:search": {
@@ -92,6 +99,7 @@ export default function RoleManagement() {
   const { user } = useAuth();
   const isOrgOwner = user?.is_owner ?? false;
   const [roles, setRoles] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [permissions, setPermissions] = useState([]);
   const [draft, setDraft] = useState(emptyDraft);
   const [loading, setLoading] = useState(true);
@@ -101,11 +109,26 @@ export default function RoleManagement() {
   const [deletingRole, setDeletingRole] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
+  const manageableDepartments = departments.filter(
+    (department) =>
+      isOrgOwner ||
+      (user?.permissions?.includes("departments:manage") &&
+        user?.department_ids?.includes(department.id))
+  );
+  const editingRole = roles.find((role) => role.id === draft.id);
+  const roleScopeLocked = Boolean(
+    editingRole && (editingRole.member_count || editingRole.document_count)
+  );
+
   const load = useCallback(async () => {
     try {
-      const result = await getOrganizationRoles();
+      const [result, departmentResult] = await Promise.all([
+        getOrganizationRoles(),
+        getDepartments(),
+      ]);
       setRoles(result.roles || []);
       setPermissions(result.permissions || []);
+      setDepartments(departmentResult.departments ?? (Array.isArray(departmentResult) ? departmentResult : []));
       setError("");
     } catch (loadError) {
       setError(loadError.message || "Failed to load roles");
@@ -147,12 +170,16 @@ export default function RoleManagement() {
         await updateOrganizationRole(draft.id, {
           name: draft.name,
           permissions: draft.permissions,
+          scope: draft.scope,
+          department_id: draft.scope === "department" ? draft.department_id : null,
         });
         setNotice(`Role "${draft.name}" updated successfully.`);
       } else {
         await createOrganizationRole({
           name: draft.name,
           permissions: draft.permissions,
+          scope: draft.scope,
+          department_id: draft.scope === "department" ? draft.department_id : null,
         });
         setNotice(`Role "${draft.name}" created successfully.`);
       }
@@ -240,6 +267,12 @@ export default function RoleManagement() {
               Define the role name and select the permissions granted to members with this role.
             </p>
           </div>
+          {editingRole?.scope_review_required && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              This legacy role is quarantined until the organization Owner explicitly confirms its scope.
+              Reassign all users and document grants before resolving it.
+            </div>
+          )}
 
           <label className="flex max-w-md flex-col gap-1 text-sm text-ink-soft">
             Role name
@@ -252,6 +285,54 @@ export default function RoleManagement() {
               className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink placeholder:text-slate-light focus:border-index focus:outline-none"
             />
           </label>
+
+          <div className="grid max-w-2xl gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm text-ink-soft">
+              Role scope
+              <select
+                className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink"
+                value={draft.scope}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    scope: event.target.value,
+                    department_id: event.target.value === "organization" ? "" : draft.department_id,
+                  })
+                }
+                disabled={roleScopeLocked}
+              >
+                <option
+                  value="organization"
+                  disabled={!isOrgOwner && user?.role_scope === "department"}
+                >
+                  Organization-wide
+                </option>
+                <option
+                  value="department"
+                  disabled={!isOrgOwner && !user?.permissions?.includes("departments:manage")}
+                >
+                  Department-specific
+                </option>
+              </select>
+            </label>
+            {draft.scope === "department" && (
+              <label className="flex flex-col gap-1 text-sm text-ink-soft">
+                Department
+                <select
+                  required
+                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink"
+                  value={draft.department_id}
+                  onChange={(event) => setDraft({ ...draft, department_id: event.target.value })}
+                  disabled={roleScopeLocked}
+                >
+                  <option value="">Select a department</option>
+                  {manageableDepartments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
 
           {/* Grouped Permissions */}
           <div className="flex flex-col gap-4">
@@ -366,9 +447,17 @@ export default function RoleManagement() {
                       Protected Owner
                     </span>
                   )}
+                  {role.scope_review_required && (
+                    <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
+                      Owner review required
+                    </span>
+                  )}
                 </div>
 
                 <p className="mt-1 text-xs text-slate">
+                  {role.scope === "department"
+                    ? `Department-specific · ${role.department?.name || "Department"} · `
+                    : "Organization-wide · "}
                   {role.member_count} member{role.member_count === 1 ? "" : "s"}
                 </p>
 
@@ -397,21 +486,29 @@ export default function RoleManagement() {
 
               {!role.is_owner && (
                 <div className="flex items-center gap-2 pt-1">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="px-3 py-1 text-xs"
-                    onClick={() => {
-                      setDraft({
-                        id: role.id,
-                        name: role.name,
-                        permissions: role.permissions,
-                      });
-                      window.scrollTo({ top: 0, behavior: "smooth" });
-                    }}
-                  >
-                    Edit
-                  </Button>
+                  {(!role.scope_review_required || isOrgOwner) &&
+                    (role.scope !== "department" ||
+                    isOrgOwner ||
+                    (user?.permissions?.includes("departments:manage") &&
+                      user?.department_ids?.includes(role.department_id))) && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="px-3 py-1 text-xs"
+                      onClick={() => {
+                        setDraft({
+                          id: role.id,
+                          name: role.name,
+                          permissions: role.permissions,
+                          scope: role.scope || "organization",
+                          department_id: role.department_id || "",
+                        });
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                    >
+                      Edit
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="secondary"

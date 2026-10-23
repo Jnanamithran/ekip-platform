@@ -1,8 +1,8 @@
 # EKIP Project Progress
 
-> Last reviewed: 2026-10-23
+> Last reviewed: 2026-10-24
 > Project stage: functional local development prototype
-> Current branch at review: `feature/auto-load-env-local-guide`
+> Current branch at review: `main`
 > For setup and usage, start with the [README](README.md).
 
 ## Overview
@@ -22,8 +22,8 @@ production-hardened service.
 
 | Area | Status | Implemented scope |
 | --- | --- | --- |
-| Frontend (`apps/frontend`) | Implemented | React/Vite sign-up and login, account settings, search and answer history, upload, document previews, workspace and department management, user and role management, analytics, and Google Drive integration screens. |
-| Backend (`apps/backend`) | Implemented | Express APIs, Prisma/PostgreSQL access, authentication, permission checks, user and workspace administration, department and role management, document operations, AI-service proxy, analytics, and Google Drive integration. |
+| Frontend (`apps/frontend`) | Implemented | React/Vite sign-up and login, account settings, search and answer history, upload, document previews, workspace and department management, department-grouped user management, scoped role management, analytics, and Google Drive integration screens. Document role selectors filter department-scoped roles against each target department; the Owner role is always selected and disabled in document access controls. |
+| Backend (`apps/backend`) | Implemented | Express APIs, Prisma/PostgreSQL access, authentication, permission checks, user and workspace administration, organization-wide and department-scoped role management, document operations, AI-service proxy, analytics, and Google Drive integration. Upload, document access updates, and Drive imports validate role scope against the target department. |
 | Text AI (`apps/ai-service`) | Implemented | PDF, DOCX, XLSX, and TXT parsing; scanned-PDF OCR fallback; page-aware chunking; embeddings; Qdrant indexing; access-filtered dense and sparse retrieval; hybrid ranking; reranking; Ollama generation; citation extraction; and document preview support. |
 | Visual AI (`apps/ai-service-visual`) | Optional implementation | ColPali page embeddings and Qwen2-VL question answering for scanned pages. The service is included in the Docker Compose `ai` profile and needs additional model resources and compatible GPU support. |
 | PostgreSQL and Prisma | Integrated | Organization, workspace, department, user, role, document, document-role access, refresh-token, integration-token, answer-history, and request-progress data models, with migrations. |
@@ -40,12 +40,17 @@ production-hardened service.
    Access and refresh tokens, password controls, login protection, and account
    activation/deactivation are represented in the implementation.
 2. **Workspace administration:** authorized users can manage workspace
-   settings, departments, users, and custom roles. Department operations
-   include validation and safeguards for default or in-use departments.
+   settings, departments, users, and custom roles. Custom roles may be
+   organization-wide or department-scoped. The Manage Users page groups
+   accounts under their primary department. Department operations include
+   validation and safeguards for default or in-use departments.
 3. **Document ingestion:** users with upload permission can submit PDF, DOCX,
    XLSX, or TXT files. The backend forwards files for processing; the AI
    service extracts content, chunks it, creates embeddings, and indexes it
    with organization, workspace, department, and role access metadata.
+   Document access selectors show organization-wide roles and only the
+   department-specific roles matching the target department; Owner access is
+   included and locked in the UI.
 4. **Question answering:** the backend derives authorization context from the
    authenticated user. The AI service filters document retrieval by that
    context, combines dense and sparse search, reranks passages, generates an
@@ -63,6 +68,9 @@ production-hardened service.
 
 - Roles are organization-defined and consist of named permissions; backend
   routes enforce those permissions independently of frontend navigation.
+- Custom roles can be organization-wide or department-scoped. Department roles
+  are constrained during assignment and document access changes; a role from
+  one department cannot be selected for a document in another department.
 - Document access is scoped using organization, workspace, department, and
   allowed-role metadata. Department grants are constrained to the user's
   workspace; they do not provide access to another workspace.
@@ -77,9 +85,24 @@ production-hardened service.
 ## Testing and verification status
 
 The repository includes backend tests for authentication, department
-management, and Google Drive integration behavior. AI tests cover selected
-endpoint behavior, parsing, chunking, citations, generation grounding,
-retrieval authorization, OCR behavior, and RBAC isolation.
+management, Google Drive integration behavior, department-scoped role
+assignment, and document authorization. AI tests cover selected endpoint
+behavior, parsing, chunking, citations, generation grounding, retrieval
+authorization, OCR behavior, and RBAC isolation.
+
+Latest local checks for the scoped-role and document-access changes:
+
+- `npm test -- --runInBand` from `apps/backend` — passed, 38 tests across 5
+  suites.
+- `npm run build` from `apps/frontend` — passed.
+- `npm run lint` from `apps/frontend` — completed with warnings; no errors.
+- `npx prisma validate --schema src/prisma/schema.prisma` from `apps/backend`
+  — passed.
+- `npx prisma migrate deploy --schema src/prisma/schema.prisma` from
+  `apps/backend` — passed; the local database reported all migrations
+  applied.
+
+These are local checks, not a claim that CI or production deployment was run.
 
 The configured CI checks are narrower than the full test inventory:
 
