@@ -29,7 +29,17 @@ async function authenticate(req, res, next) {
         active: true,
         role_id: true,
         department_id: true,
-        role: { select: { id: true, name: true, permissions: true, is_owner: true } },
+        role: {
+          select: {
+            id: true,
+            name: true,
+            permissions: true,
+            is_owner: true,
+            scope: true,
+            department_id: true,
+            scope_review_required: true,
+          },
+        },
         department: {
           select: {
             name: true,
@@ -59,6 +69,12 @@ async function authenticate(req, res, next) {
       return res.status(401).json({ error: 'Invalid or inactive account' });
     }
     const isOwner = user.department.workspace.organization.owner_user_id === user.id;
+    if (user.role.scope_review_required && !isOwner) {
+      return res.status(403).json({
+        error: 'Your role needs organization Owner review before it can be used',
+        code: 'ROLE_SCOPE_REVIEW_REQUIRED',
+      });
+    }
     const orgId = user.department.workspace.org_id;
     const departmentIds = [user.department_id];
     for (const grant of user.authorized_departments || []) {
@@ -82,6 +98,9 @@ async function authenticate(req, res, next) {
       authorized_department_ids: departmentIds.filter((id) => id !== user.department_id),
       role_id: user.role_id,
       role: isOwner ? 'Owner' : user.role.name,
+      role_scope: user.role.scope,
+      role_department_id: user.role.department_id,
+      role_scope_review_required: user.role.scope_review_required,
       permissions: isOwner ? OWNER_PERMISSIONS : user.role.permissions,
       is_owner: isOwner,
     };
@@ -99,6 +118,9 @@ function requirePermission(permission) {
   return (req, res, next) => {
     if (
       !req.user ||
+      (permission === 'workspace:manage' &&
+        req.user.role_scope === 'department' &&
+        !req.user.is_owner) ||
       (!req.user.is_owner && !req.user.permissions.includes(permission))
     ) {
       return res.status(403).json({ error: 'You do not have permission to do this' });
@@ -109,10 +131,17 @@ function requirePermission(permission) {
 
 function requireAnyPermission(...permissions) {
   return (req, res, next) => {
+    const effectivePermissions = permissions.filter(
+      (permission) => !(
+        permission === 'workspace:manage' &&
+        req.user?.role_scope === 'department' &&
+        !req.user.is_owner
+      )
+    );
     if (
       !req.user ||
       (!req.user.is_owner &&
-        !permissions.some((permission) => req.user.permissions.includes(permission)))
+        !effectivePermissions.some((permission) => req.user.permissions.includes(permission)))
     ) {
       return res.status(403).json({ error: 'You do not have permission to do this' });
     }

@@ -30,9 +30,12 @@ evaluation. It is not a claim of production readiness.
 - Review workspace settings, users, and integrations according to role.
 - Import supported Google Drive files through the authorized integration flow.
 
-Roles currently defined in the backend are `Admin`, `Manager`, `Employee`, and
-`Intern`. Authorization is enforced at the backend and retrieval layers, not
-only by hiding controls in the frontend.
+Organizations can define custom roles that apply organization-wide or to one
+department. The protected Owner role remains organization-wide, and a
+department-scoped role can only be assigned to a user whose primary department
+matches, and requires department-management access. Authorization is enforced
+at the backend and retrieval layers, not only by hiding controls in the
+frontend.
 
 ## Local development
 

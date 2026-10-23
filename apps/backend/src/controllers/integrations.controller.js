@@ -302,7 +302,12 @@ async function importFiles(req, res) {
     if (department.error) {
       return res.status(department.status).json({ error: department.error });
     }
-    const access = await validateAllowedRoleIds(prisma, f.allowed_role_ids || [req.user.role_id], req.user);
+    const access = await validateAllowedRoleIds(
+      prisma,
+      f.allowed_role_ids || [req.user.role_id],
+      req.user,
+      department.departmentId
+    );
     if (access.error) return res.status(400).json({ error: access.error });
 
     validatedFiles.push({

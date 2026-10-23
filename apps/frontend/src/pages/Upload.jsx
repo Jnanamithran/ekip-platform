@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  apiFetch,
-  createDepartment,
   deleteDocument,
   getDepartments,
   getDocuments,
@@ -23,12 +21,6 @@ export default function Upload() {
   const canManageAccess = Boolean(
     user?.is_owner || user?.permissions?.includes("documents:manage_access")
   );
-  const canManageDepts = Boolean(
-    user?.is_owner ||
-      user?.permissions?.includes("departments:manage") ||
-      user?.permissions?.includes("workspace:manage")
-  );
-
   const fileInput = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -54,17 +46,9 @@ export default function Upload() {
 
   // Department selection state
   const [departments, setDepartments] = useState([]);
-  const [workspaces, setWorkspaces] = useState([]);
   const [selectedDeptId, setSelectedDeptId] = useState("");
   const [loadingDepts, setLoadingDepts] = useState(true);
 
-  // Create department modal state
-  const [showCreateDeptModal, setShowCreateDeptModal] = useState(false);
-  const [newDeptName, setNewDeptName] = useState("");
-  const [newDeptDesc, setNewDeptDesc] = useState("");
-  const [newDeptWsId, setNewDeptWsId] = useState("");
-  const [creatingDept, setCreatingDept] = useState(false);
-  const [createDeptError, setCreateDeptError] = useState("");
   const [notice, setNotice] = useState("");
   const [reindexError, setReindexError] = useState("");
 
@@ -107,7 +91,9 @@ export default function Upload() {
     getOrganizationRoles()
       .then((result) => {
         if (!active) return;
-        const availableRoles = result.roles || [];
+        const availableRoles = (result.roles || []).filter(
+          (role) => !role.scope_review_required
+        );
         setRoles(availableRoles);
         if (!availableRoles.length) {
           setRolesError("No organization roles are available. Ask an administrator to configure roles before uploading.");
@@ -134,20 +120,29 @@ export default function Upload() {
     };
   }, [canManageAccess, user?.role_id]);
 
+  const rolesForSelectedDepartment = roles.filter(
+    (role) => role.scope !== "department" || role.department_id === selectedDeptId
+  );
+  const rolesForAccessDepartment = roles.filter(
+    (role) =>
+      role.scope !== "department" || role.department_id === accessDepartmentId
+  );
+  const selectedScopedRoleIds = [
+    ...new Set([
+      ...selectedRoleIds.filter((id) =>
+        rolesForSelectedDepartment.some((role) => role.id === id)
+      ),
+      ...rolesForSelectedDepartment
+        .filter((role) => role.is_owner)
+        .map((role) => role.id),
+    ]),
+  ];
   const loadDepartments = useCallback(async () => {
     setLoadingDepts(true);
     try {
-      const [deptRes, wsRes] = await Promise.all([
-        getDepartments().catch(() => ({ departments: [] })),
-        apiFetch("/admin/workspaces").catch(() => ({ workspaces: [] })),
-      ]);
+      const deptRes = await getDepartments().catch(() => ({ departments: [] }));
       const depts = deptRes.departments || [];
       setDepartments(depts);
-      setWorkspaces(wsRes.workspaces || []);
-
-      if (wsRes.workspaces?.length && !newDeptWsId) {
-        setNewDeptWsId(wsRes.workspaces[0].id);
-      }
 
       // Default selected department to user's assigned department or first available
       if (depts.length > 0) {
@@ -159,7 +154,7 @@ export default function Upload() {
     } finally {
       setLoadingDepts(false);
     }
-  }, [newDeptWsId, user?.department_id]);
+  }, [user?.department_id]);
 
   useEffect(() => {
     loadDepartments();
@@ -167,33 +162,6 @@ export default function Upload() {
     const intervalId = window.setInterval(refreshDocuments, 5000);
     return () => window.clearInterval(intervalId);
   }, [loadDepartments, refreshDocuments]);
-
-  async function handleCreateDepartment(e) {
-    e.preventDefault();
-    if (!newDeptName.trim()) {
-      setCreateDeptError("Department name is required");
-      return;
-    }
-    setCreatingDept(true);
-    setCreateDeptError("");
-    try {
-      const { department } = await createDepartment({
-        name: newDeptName.trim(),
-        description: newDeptDesc.trim() || undefined,
-        workspace_id: newDeptWsId || undefined,
-      });
-      setDepartments((prev) => [...prev, department]);
-      setSelectedDeptId(department.id);
-      setNotice(`Department "${department.name}" created and selected.`);
-      setNewDeptName("");
-      setNewDeptDesc("");
-      setShowCreateDeptModal(false);
-    } catch (err) {
-      setCreateDeptError(err.message || "Failed to create department");
-    } finally {
-      setCreatingDept(false);
-    }
-  }
 
   async function uploadFiles(files, roleIds) {
     if (!files.length) return;
@@ -314,8 +282,24 @@ export default function Upload() {
 
   function openAccessEditor(document) {
     setAccessEdit(document);
-    setAccessRoleIds(document.allowedRoleIds);
     setAccessDepartmentId(document.departmentId);
+    const allowedRoleIds = new Set(
+      roles
+        .filter(
+          (role) =>
+            role.scope !== "department" ||
+            role.department_id === document.departmentId
+        )
+        .map((role) => role.id)
+    );
+    setAccessRoleIds([
+      ...new Set([
+        ...document.allowedRoleIds.filter((id) => allowedRoleIds.has(id)),
+        ...roles
+          .filter((role) => role.is_owner)
+          .map((role) => role.id),
+      ]),
+    ]);
     setAccessError("");
   }
 
@@ -345,11 +329,59 @@ export default function Upload() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       {/* Header */}
-      <div>
-        <h1 className="font-display text-xl text-ink">Upload documents</h1>
-        <p className="text-sm text-slate">
-          Upload PDF, DOCX, XLSX, or TXT documents. Documents are indexed and linked to your selected department.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-display text-xl text-ink">Upload documents</h1>
+          <p className="text-sm text-slate">
+            Upload PDF, DOCX, XLSX, or TXT documents. Documents are indexed and linked to your selected department.
+          </p>
+        </div>
+        <label
+          htmlFor="dept-select"
+          className="flex min-w-56 flex-col gap-1 text-xs font-medium text-ink-soft"
+        >
+          Department
+          {loadingDepts ? (
+            <span className="py-2 text-xs font-normal text-slate">Loading departments…</span>
+          ) : departments.length === 0 ? (
+            <span className="py-2 text-xs font-normal text-danger">No departments found.</span>
+          ) : (
+            <select
+              id="dept-select"
+              value={selectedDeptId}
+              onChange={(event) => {
+                const departmentId = event.target.value;
+                setSelectedDeptId(departmentId);
+                const allowedRoleIds = new Set(
+                  roles
+                    .filter(
+                      (role) =>
+                        role.scope !== "department" ||
+                        role.department_id === departmentId
+                    )
+                    .map((role) => role.id)
+                );
+                setSelectedRoleIds((current) =>
+                  current.filter((id) => allowedRoleIds.has(id))
+                );
+              }}
+              className="rounded-md border border-hairline bg-paper px-3 py-1.5 text-sm font-medium text-ink focus:border-index focus:outline-none"
+            >
+              {departments.map((dept) => (
+                <option key={dept.id} value={dept.id}>
+                  {dept.name} {dept.workspace?.name ? `(${dept.workspace.name})` : ""}
+                </option>
+              ))}
+            </select>
+          )}
+          {selectedDeptId && departments.length > 0 && departments.find(
+            (department) => department.id === selectedDeptId
+          )?.description && (
+            <span className="max-w-64 font-normal text-slate">
+              {departments.find((department) => department.id === selectedDeptId)?.description}
+            </span>
+          )}
+        </label>
       </div>
 
       {notice && (
@@ -368,54 +400,6 @@ export default function Upload() {
           {loadError}
         </div>
       )}
-
-      {/* Department Selector Section */}
-      <Card className="p-4 bg-paper-raised/40">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <label htmlFor="dept-select" className="text-sm font-medium text-ink-soft">
-              Department:
-            </label>
-            {loadingDepts ? (
-              <span className="text-xs text-slate">Loading departments…</span>
-            ) : departments.length === 0 ? (
-              <span className="text-xs text-danger">No departments found.</span>
-            ) : (
-              <select
-                id="dept-select"
-                value={selectedDeptId}
-                onChange={(e) => setSelectedDeptId(e.target.value)}
-                className="rounded-md border border-hairline bg-paper px-3 py-1.5 text-sm font-medium text-ink focus:border-index focus:outline-none"
-              >
-                {departments.map((dept) => (
-                  <option key={dept.id} value={dept.id}>
-                    {dept.name} {dept.workspace?.name ? `(${dept.workspace.name})` : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-            {selectedDeptId && departments.length > 0 && (
-              <span className="text-xs text-slate">
-                {departments.find((d) => d.id === selectedDeptId)?.description || ""}
-              </span>
-            )}
-          </div>
-
-          {canManageDepts && (
-            <Button
-              type="button"
-              variant="secondary"
-              className="text-xs py-1 px-3"
-              onClick={() => {
-                setCreateDeptError("");
-                setShowCreateDeptModal(true);
-              }}
-            >
-              + Create department
-            </Button>
-          )}
-        </div>
-      </Card>
 
       {/* Upload Dropzone */}
       <Card className="p-6 border-2 border-dashed border-hairline rounded-xl">
@@ -448,11 +432,6 @@ export default function Upload() {
             <p className="text-xs text-slate">
               Supports multiple files: PDF, DOCX, XLSX, TXT (up to 50 MB each)
             </p>
-            {selectedDeptId && departments.length > 0 && (
-              <span className="mt-2 rounded-full bg-paper px-3 py-1 text-xs text-ink-soft border border-hairline">
-                Uploading to: <strong>{departments.find((d) => d.id === selectedDeptId)?.name}</strong>
-              </span>
-            )}
           </div>
         </label>
         {pendingFiles.length > 0 && (
@@ -479,7 +458,7 @@ export default function Upload() {
               <p className="text-xs text-slate">Loading organization roles…</p>
             ) : rolesError ? (
               <p role="alert" className="text-xs text-danger">{rolesError}</p>
-            ) : roles.length === 0 ? (
+            ) : rolesForSelectedDepartment.length === 0 ? (
               <p className="text-xs text-danger">No roles are available; uploads are disabled.</p>
             ) : (
               <fieldset className="flex flex-col gap-2">
@@ -487,19 +466,29 @@ export default function Upload() {
                 <label className="flex items-center gap-2 text-xs font-medium text-ink">
                   <input
                     type="checkbox"
-                    checked={selectedRoleIds.length === roles.length}
+                    checked={
+                      rolesForSelectedDepartment.length > 0 &&
+                      selectedScopedRoleIds.length === rolesForSelectedDepartment.length
+                    }
                     onChange={(event) =>
-                      setSelectedRoleIds(event.target.checked ? roles.map((role) => role.id) : [])
+                      setSelectedRoleIds(
+                        event.target.checked
+                          ? rolesForSelectedDepartment.map((role) => role.id)
+                          : rolesForSelectedDepartment
+                              .filter((role) => role.is_owner)
+                              .map((role) => role.id)
+                      )
                     }
                   />
                   Select all
                 </label>
                 <div className="flex flex-wrap gap-x-4 gap-y-2">
-                  {roles.map((role) => (
+                  {rolesForSelectedDepartment.map((role) => (
                     <label key={role.id} className="flex items-center gap-2 text-xs text-ink-soft">
                       <input
                         type="checkbox"
-                        checked={selectedRoleIds.includes(role.id)}
+                        checked={role.is_owner || selectedScopedRoleIds.includes(role.id)}
+                        disabled={role.is_owner}
                         onChange={() =>
                           setSelectedRoleIds((current) =>
                             current.includes(role.id)
@@ -509,6 +498,11 @@ export default function Upload() {
                         }
                       />
                       {role.name}
+                      {role.scope === "department" && (
+                        <span className="text-slate">
+                          {" "}({departments.find((department) => department.id === role.department_id)?.name || "Department"})
+                        </span>
+                      )}
                     </label>
                   ))}
                 </div>
@@ -527,11 +521,12 @@ export default function Upload() {
               !pendingFiles.length ||
               uploadingFiles ||
               !selectedDeptId ||
-              !selectedRoleIds.length ||
-              (canManageAccess && (rolesLoading || rolesError || !roles.length))
+              !selectedScopedRoleIds.length ||
+              (canManageAccess &&
+                (rolesLoading || rolesError || !rolesForSelectedDepartment.length))
             }
             className="mt-4"
-            onClick={() => uploadFiles(pendingFiles, selectedRoleIds)}
+            onClick={() => uploadFiles(pendingFiles, selectedScopedRoleIds)}
           >
             {uploadingFiles
               ? "Uploading…"
@@ -699,7 +694,29 @@ export default function Upload() {
                 Department
                 <select
                   value={accessDepartmentId}
-                  onChange={(event) => setAccessDepartmentId(event.target.value)}
+                  onChange={(event) => {
+                    const departmentId = event.target.value;
+                    setAccessDepartmentId(departmentId);
+                    const allowedRoleIds = new Set(
+                      roles
+                        .filter(
+                          (role) =>
+                            role.scope !== "department" ||
+                            role.department_id === departmentId
+                        )
+                        .map((role) => role.id)
+                    );
+                    setAccessRoleIds((current) =>
+                      [
+                        ...new Set([
+                          ...current.filter((id) => allowedRoleIds.has(id)),
+                          ...roles
+                            .filter((role) => role.is_owner)
+                            .map((role) => role.id),
+                        ]),
+                      ]
+                    );
+                  }}
                   className="rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink"
                   required
                 >
@@ -712,11 +729,12 @@ export default function Upload() {
                 <legend className="mb-1 text-xs font-medium text-ink-soft">Allowed Roles</legend>
                 {rolesLoading && <p className="text-xs text-slate">Loading roles…</p>}
                 {rolesError && <p role="alert" className="text-xs text-danger">{rolesError}</p>}
-                {roles.map((role) => (
+                {rolesForAccessDepartment.map((role) => (
                   <label key={role.id} className="flex items-center gap-2 text-sm text-ink">
                     <input
                       type="checkbox"
-                      checked={accessRoleIds.includes(role.id)}
+                      checked={role.is_owner || accessRoleIds.includes(role.id)}
+                      disabled={role.is_owner}
                       onChange={() =>
                         setAccessRoleIds((current) =>
                           current.includes(role.id)
@@ -728,6 +746,11 @@ export default function Upload() {
                     {role.name}
                   </label>
                 ))}
+                {!rolesForAccessDepartment.length && !rolesLoading && !rolesError && (
+                  <p className="text-xs text-slate">
+                    No roles are available for this department.
+                  </p>
+                )}
               </fieldset>
               {accessError && <p role="alert" className="text-sm text-danger">{accessError}</p>}
               <div className="flex justify-end gap-3">
@@ -751,83 +774,6 @@ export default function Upload() {
         </div>
       )}
 
-      {/* Create Department Modal */}
-      {showCreateDeptModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="flex w-full max-w-md flex-col gap-4 p-6 shadow-xl">
-            <div className="border-b border-hairline pb-2">
-              <h2 className="font-display text-lg text-ink">Create new department</h2>
-              <p className="text-xs text-slate">
-                Add a department to organize documents and users.
-              </p>
-            </div>
-
-            <form onSubmit={handleCreateDepartment} className="flex flex-col gap-4">
-              {workspaces.length > 1 && (
-                <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
-                  Workspace
-                  <select
-                    value={newDeptWsId}
-                    onChange={(e) => setNewDeptWsId(e.target.value)}
-                    className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none"
-                  >
-                    {workspaces.map((ws) => (
-                      <option key={ws.id} value={ws.id}>
-                        {ws.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
-                Department name
-                <input
-                  required
-                  maxLength={80}
-                  value={newDeptName}
-                  onChange={(e) => setNewDeptName(e.target.value)}
-                  placeholder="e.g. Legal, Engineering, Marketing"
-                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none"
-                  autoFocus
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 text-xs font-medium text-ink-soft">
-                Description (optional)
-                <textarea
-                  rows={2}
-                  maxLength={240}
-                  value={newDeptDesc}
-                  onChange={(e) => setNewDeptDesc(e.target.value)}
-                  placeholder="Brief summary of this department's function..."
-                  className="rounded-md border border-hairline bg-paper-raised px-3 py-2 text-sm text-ink focus:border-index focus:outline-none resize-none"
-                />
-              </label>
-
-              {createDeptError && (
-                <p role="alert" className="text-xs text-danger">
-                  {createDeptError}
-                </p>
-              )}
-
-              <div className="flex justify-end gap-3 pt-2">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={creatingDept}
-                  onClick={() => setShowCreateDeptModal(false)}
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={creatingDept || !newDeptName.trim()}>
-                  {creatingDept ? "Creating…" : "Create & select"}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }
