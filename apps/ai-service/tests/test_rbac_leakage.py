@@ -2,7 +2,7 @@
 RBAC Leakage Tests — proves unauthorized content never reaches retrieval.
 Run with: pytest tests/test_rbac_leakage.py -v -m integration
 
-Requires Qdrant running: docker start ekip-qdrant (or docker compose --profile ai up qdrant)
+Requires local Qdrant running on localhost:6333 (see LOCAL_RUNNING.md).
 """
 import sys
 import time

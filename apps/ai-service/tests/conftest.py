@@ -13,3 +13,12 @@ import sys
 SVC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if SVC_DIR not in sys.path:
     sys.path.insert(0, SVC_DIR)
+
+# These legacy pipeline demos run live Qdrant/Ollama requests at import time;
+# they are command-line demos, not pytest test modules.
+collect_ignore = [
+    "test_citations.py",
+    "test_generation.py",
+    "test_hybrid.py",
+    "test_reranker.py",
+]
