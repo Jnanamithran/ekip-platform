@@ -55,7 +55,7 @@ def health():
 VISUAL_COLLECTION = "ekip_visual_documents"
 VISUAL_SERVICE_URL = os.getenv("VISUAL_SERVICE_URL", "http://ai-service-visual:8001")
 AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "")
-VISUAL_ASK_TIMEOUT = float(os.getenv("VISUAL_ASK_TIMEOUT", "300"))
+VISUAL_ASK_TIMEOUT = float(os.getenv("VISUAL_ASK_TIMEOUT", "1800"))
 
 
 async def require_backend_service_key(x_ekip_service_key: str | None = Header(default=None)):
@@ -314,13 +314,68 @@ async def ask(req: AskRequest, _service_key: None = Depends(require_backend_serv
     }
 
     visual_available = await asyncio.to_thread(has_visual_docs, rbac_dict)
+    if visual_available:
+        print('[ai-service] visual QA enabled: accessible visual pages found')
+    else:
+        print(
+            '[ai-service] visual QA skipped: no visual pages match this '
+            "requester's organization, workspace, department, and role"
+        )
 
     if visual_available:
         # Run text and visual in parallel, merge citations
         text_result, visual_result = await asyncio.gather(
             run_text_pipeline(req.query, rbac, req.token, req.request_id),
             run_visual_pipeline(req.query, rbac_dict),
+            return_exceptions=True,
         )
+
+        if isinstance(text_result, Exception):
+            if isinstance(visual_result, Exception):
+                print(
+                    f'[ai-service] text and visual answer pipelines failed: '
+                    f'text={text_result}; visual={visual_result}'
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail='Both text and visual answer services failed.',
+                )
+            print(f'[ai-service] text answer pipeline failed: {text_result}')
+            return AskResponse(
+                answer=visual_result['answer'],
+                sources=visual_result['sources'],
+                model=visual_result['model'],
+                has_answer=visual_result['has_answer'],
+                pipeline='visual',
+            )
+
+        if isinstance(visual_result, Exception):
+            print(f'[ai-service] visual answer pipeline failed: {visual_result}')
+            if text_result['sources']:
+                return AskResponse(
+                    answer=text_result['answer'],
+                    sources=text_result['sources'],
+                    model=text_result['model'],
+                    has_answer=text_result['has_answer'],
+                    pipeline='text',
+                )
+
+            if isinstance(visual_result, httpx.TimeoutException):
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        'Visual answering timed out while loading or running '
+                        'Qwen2-VL, and the text pipeline found no supporting '
+                        'passages. Retry after the visual model finishes loading.'
+                    ),
+                ) from visual_result
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    'Visual answering failed, and the text pipeline found no '
+                    'supporting passages.'
+                ),
+            ) from visual_result
 
         # Merge citations from both pipelines
         all_citations = text_result['sources'] + visual_result['sources']
@@ -396,20 +451,31 @@ async def ingest(
             # --- Step 1: parse the uploaded file into pages ---
             await update_document('Parsing document pages', 20)
             ingest_result = ingest_document(str(file_path), filename=filename)
+            needs_visual_index = (
+                ingest_result.file_type == FileType.PDF
+                and (
+                    getattr(ingest_result, 'has_scanned_pages', False)
+                    or ingest_result.is_scanned_or_empty
+                )
+            )
+            print(
+                f'[ai-service] ingest detection: filename={filename!r} '
+                f'file_type={ingest_result.file_type.value} '
+                f'needs_visual_index={needs_visual_index} '
+                f'is_scanned_or_empty={ingest_result.is_scanned_or_empty}'
+            )
             await update_document(
                 f'Parsed {len(ingest_result.pages)} page(s)',
                 35,
             )
 
             # --- Step 1b: scanned/image-only PDFs are also visual-indexed ---
-            if (
-                ingest_result.is_scanned_or_empty
-                and ingest_result.file_type == FileType.PDF
-            ):
+            if needs_visual_index:
                 await update_document(
                     'Routing scanned pages to the visual pipeline (ColPali)',
                     40,
                 )
+                print(f'[ai-service] sending {filename!r} to visual ingestion')
                 visual_rbac = {
                     'org_id':        rbac_info.org_id,
                     'workspace_id':  rbac_info.workspace_id,
@@ -442,7 +508,13 @@ async def ingest(
                             },
                         )
                         visual_response.raise_for_status()
-                        visual_indexed = visual_response.json().get('pages_upserted', 0) > 0
+                        visual_payload = visual_response.json()
+                        pages_indexed = visual_payload.get('pages_upserted', 0)
+                        visual_indexed = pages_indexed > 0
+                        print(
+                            f'[ai-service] visual ingestion completed for '
+                            f'{filename!r}: pages_indexed={pages_indexed}'
+                        )
                 except Exception as exc:
                     # Non-fatal: text indexing below still proceeds, and the
                     # document remains searchable through the text pipeline.

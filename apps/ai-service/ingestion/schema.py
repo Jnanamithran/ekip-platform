@@ -38,6 +38,7 @@ class IngestResult(BaseModel):
     pages: List[PageContent]
     total_pages: int = 0
     is_scanned_or_empty: bool = False   # flag for near-zero extractable text
+    has_scanned_pages: bool = False     # flag for PDFs needing visual indexing
     warning: Optional[str] = None
 
     def model_post_init(self, __context) -> None:

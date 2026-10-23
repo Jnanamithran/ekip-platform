@@ -2,22 +2,21 @@
 Qwen2-VL visual question answering — Phase 2 visual pipeline.
 
 Takes page images retrieved by ColPali and generates grounded answers.
-Uses 4-bit quantization to fit in 6GB VRAM alongside ColPali.
+Uses 4-bit quantization to reduce VRAM use.
 
 VRAM strategy for RTX 3050 6GB:
-  - ColPali (inference only): ~1.5GB
-  - Qwen2-VL-7B (4-bit quantized): ~4.5GB
-  - Total: ~6GB — tight but workable if models are loaded lazily
-  - Never keep both ColPali and Qwen2-VL loaded at the same time.
+  - Use the smaller Qwen2-VL-2B model to reduce memory and inference time.
+  - ColPali and Qwen2-VL are not kept loaded at the same time.
 """
 
 import os
+import gc
 import torch
 from PIL import Image
 
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 
-QWEN_MODEL = os.getenv("QWEN_MODEL", "Qwen/Qwen2-VL-7B-Instruct")
+QWEN_MODEL = os.getenv("QWEN_MODEL", "Qwen/Qwen2-VL-2B-Instruct")
 
 _model = None
 _processor = None
@@ -27,7 +26,7 @@ def get_qwen():
     """Lazy-load Qwen2-VL with 4-bit quantization (falls back to float16)."""
     global _model, _processor
     if _model is None:
-        print("Loading Qwen2-VL model (first time — downloads ~4GB)...")
+        print("Loading Qwen2-VL model (downloads weights only if not cached)...")
 
         # Try 4-bit quantization via bitsandbytes first
         try:
@@ -57,6 +56,16 @@ def get_qwen():
         )
         print("Qwen2-VL loaded.")
     return _model, _processor
+
+
+def unload_qwen() -> None:
+    """Release Qwen and its GPU memory after a visual answer is generated."""
+    global _model, _processor
+    _model = None
+    _processor = None
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def answer_from_images(
@@ -114,7 +123,6 @@ def answer_from_images(
         output_ids = model.generate(
             **inputs,
             max_new_tokens=512,
-            temperature=0.1,
             do_sample=False,
         )
 

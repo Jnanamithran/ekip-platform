@@ -208,6 +208,69 @@ def test_ask_uses_retrieved_images_and_returns_citations(
     assert generated[0]["filenames"] == ["report.pdf"]
 
 
+def test_ask_releases_colpali_before_qwen_and_unloads_qwen_afterward(
+    client, monkeypatch, tmp_path
+):
+    image_path = tmp_path / "page.png"
+    from PIL import Image
+
+    Image.new("RGB", (8, 8), color="white").save(image_path)
+    monkeypatch.setattr(
+        visual_service,
+        "search_visual",
+        lambda **kwargs: [
+            {
+                "document_id": "doc-1",
+                "filename": "report.pdf",
+                "page_num": 1,
+                "image_path": str(image_path),
+                "score": 0.9,
+            }
+        ],
+    )
+    calls = []
+    monkeypatch.setattr(
+        visual_service,
+        "unload_colpali",
+        lambda: calls.append("unload_colpali"),
+    )
+    monkeypatch.setattr(
+        visual_service,
+        "answer_from_images",
+        lambda **kwargs: calls.append("answer_from_images") or {
+            "answer": "Found it.",
+            "model": "test-model",
+            "citations": [
+                {
+                    "filename": "report.pdf",
+                    "page_num": 1,
+                    "document_id": "doc-1",
+                    "text": "[Visual content — page 1 of report.pdf]",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        visual_service,
+        "unload_qwen",
+        lambda: calls.append("unload_qwen"),
+    )
+
+    response = client.post(
+        "/visual/ask",
+        json={**SEARCH_REQUEST, "question": "What is shown?"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        "unload_colpali",
+        "answer_from_images",
+        "unload_qwen",
+        "unload_colpali",
+    ]
+
+
 def test_ask_does_not_generate_when_retrieved_images_cannot_be_opened(
     client, monkeypatch
 ):

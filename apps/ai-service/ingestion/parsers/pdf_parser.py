@@ -90,9 +90,11 @@ def try_ocr_page(pdf_path: str, page_num: int, doc=None) -> str:
 def parse_pdf(file_path: str, filename: str) -> IngestResult:
     doc = pymupdf.open(file_path)
     pages = []
+    native_text_chars = 0
 
     for page_num, page in enumerate(doc, start=1):
         text = page.get_text("text").strip()
+        native_text_chars += len(text)
         if len(text) < SCANNED_DOC_CHAR_THRESHOLD:
             # Try OCR before giving up on this page. OCR must never break
             # ingestion, so any failure falls back to the original (empty) text.
@@ -109,6 +111,8 @@ def parse_pdf(file_path: str, filename: str) -> IngestResult:
     total_chars = sum(p.char_count for p in pages)
     avg_chars_per_page = total_chars / len(pages) if pages else 0
     is_scanned = avg_chars_per_page < SCANNED_DOC_CHAR_THRESHOLD
+    avg_native_chars_per_page = native_text_chars / len(pages) if pages else 0
+    has_scanned_pages = avg_native_chars_per_page < SCANNED_DOC_CHAR_THRESHOLD
 
     warning = None
     if is_scanned:
@@ -122,5 +126,6 @@ def parse_pdf(file_path: str, filename: str) -> IngestResult:
         file_type=FileType.PDF,
         pages=pages,
         is_scanned_or_empty=is_scanned,
+        has_scanned_pages=has_scanned_pages,
         warning=warning,
     )

@@ -12,6 +12,7 @@ Endpoints:
 """
 
 import os
+import threading
 
 # Auto-load apps/ai-service-visual/.env if present (uvicorn does not load .env by itself).
 _env_file = os.path.join(os.path.dirname(__file__), ".env")
@@ -27,6 +28,14 @@ if os.path.exists(_env_file):
             if _key and _key not in os.environ:
                 os.environ[_key] = _val
 
+print(
+    "[visual-ai] Hugging Face cache: "
+    + os.environ.get(
+        "HF_HOME",
+        os.path.join(os.path.expanduser("~"), ".cache", "huggingface"),
+    )
+)
+
 import secrets
 import tempfile
 import uuid
@@ -39,12 +48,14 @@ from visual.colpali_embedder import (
     embed_and_upsert_visual,
     search_visual,
     delete_visual_document,
+    unload_colpali,
 )
-from visual.qwen_generator import answer_from_images, QWEN_MODEL
+from visual.qwen_generator import answer_from_images, QWEN_MODEL, unload_qwen
 from PIL import Image
 
 app = FastAPI(title="EKIP Visual AI Service", version="0.1.0")
 AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "")
+_visual_model_lock = threading.RLock()
 
 
 async def require_ai_service_key(x_ekip_service_key: str | None = Header(default=None)):
@@ -185,13 +196,14 @@ async def ingest(
             "uploaded_by":   rbac_info.uploaded_by,
         }
 
-        pages_upserted = embed_and_upsert_visual(
-            pdf_path    = str(tmp_path),
-            document_id = document_id,
-            filename    = filename,
-            rbac        = rbac_dict,
-            total_pages = total_pages,
-        )
+        with _visual_model_lock:
+            pages_upserted = embed_and_upsert_visual(
+                pdf_path    = str(tmp_path),
+                document_id = document_id,
+                filename    = filename,
+                rbac        = rbac_dict,
+                total_pages = total_pages,
+            )
 
         return IngestResponse(
             message        = "Visual document processed successfully",
@@ -229,11 +241,12 @@ def search(
             "is_owner":      req.is_owner,
         }
 
-        raw_results = search_visual(
-            query  = req.query,
-            rbac   = rbac,
-            top_k  = req.top_k,
-        )
+        with _visual_model_lock:
+            raw_results = search_visual(
+                query  = req.query,
+                rbac   = rbac,
+                top_k  = req.top_k,
+            )
 
         results = [
             VisualSearchResult(
@@ -265,6 +278,7 @@ async def ask_visual(
       3. Qwen2-VL generates grounded answer from page images
     """
     try:
+        print("[visual] /visual/ask received")
         rbac = {
             "org_id":        req.org_id,
             "workspace_id":  req.workspace_id,
@@ -274,65 +288,79 @@ async def ask_visual(
             "is_owner":      req.is_owner,
         }
 
-        # Step 1: ColPali retrieval — RBAC applied BEFORE retrieval
-        top_pages = search_visual(
-            query  = req.question,
-            rbac   = rbac,
-            top_k  = req.top_k,
-        )
-
-        if not top_pages:
-            return VisualQAResponse(
-                answer   = "No relevant visual content found in your accessible documents.",
-                citations = [],
-                model    = QWEN_MODEL,
-            )
-
-        # Step 2: Load page images from disk
-        images = []
-        filenames = []
-        page_nums = []
-        document_ids = []
-        for page in top_pages:
+        with _visual_model_lock:
             try:
-                img = Image.open(page["image_path"])
-                images.append(img)
-                filenames.append(page["filename"])
-                page_nums.append(page["page_num"])
-                document_ids.append(page["document_id"])
-            except Exception:
-                continue
-
-        if not images:
-            return VisualQAResponse(
-                answer   = "Found matching pages but could not load their images.",
-                citations = [],
-                model    = QWEN_MODEL,
-            )
-
-        # Step 3: Qwen2-VL generates grounded answer
-        result = answer_from_images(
-            question    = req.question,
-            page_images = images,
-            filenames   = filenames,
-            page_nums   = page_nums,
-            document_ids = document_ids,
-        )
-
-        return VisualQAResponse(
-            answer    = result["answer"],
-            citations = [
-                VisualCitation(
-                    filename    = c["filename"],
-                    page_num    = c["page_num"],
-                    text        = c["text"],
-                    type        = c.get("type", "visual"),
-                    document_id = c.get("document_id", "unknown"),
+                # Step 1: ColPali retrieval — RBAC applied BEFORE retrieval
+                print("[visual] ColPali start")
+                top_pages = search_visual(
+                    query  = req.question,
+                    rbac   = rbac,
+                    top_k  = req.top_k,
                 )
-                for c in result["citations"]
-            ],
-            model   = result["model"],
-        )
+                print(f"[visual] ColPali returned {len(top_pages)} pages")
+
+                if not top_pages:
+                    print("[visual] No accessible visual pages; skipping Qwen2-VL")
+                    return VisualQAResponse(
+                        answer   = "No relevant visual content found in your accessible documents.",
+                        citations = [],
+                        model    = QWEN_MODEL,
+                    )
+
+                # Step 2: Load page images from disk
+                images = []
+                filenames = []
+                page_nums = []
+                document_ids = []
+                for page in top_pages:
+                    try:
+                        img = Image.open(page["image_path"])
+                        images.append(img)
+                        filenames.append(page["filename"])
+                        page_nums.append(page["page_num"])
+                        document_ids.append(page["document_id"])
+                    except Exception:
+                        continue
+
+                if not images:
+                    print("[visual] Retrieved pages had no loadable images; skipping Qwen2-VL")
+                    return VisualQAResponse(
+                        answer   = "Found matching pages but could not load their images.",
+                        citations = [],
+                        model    = QWEN_MODEL,
+                    )
+
+                # The GPU cannot hold both models on supported 6-GB cards.
+                unload_colpali()
+                try:
+                    print("[visual] Qwen2-VL loading")
+                    result = answer_from_images(
+                        question    = req.question,
+                        page_images = images,
+                        filenames   = filenames,
+                        page_nums   = page_nums,
+                        document_ids = document_ids,
+                    )
+                    print("[visual] Qwen2-VL done")
+                finally:
+                    unload_qwen()
+
+                return VisualQAResponse(
+                    answer    = result["answer"],
+                    citations = [
+                        VisualCitation(
+                            filename    = c["filename"],
+                            page_num    = c["page_num"],
+                            text        = c["text"],
+                            type        = c.get("type", "visual"),
+                            document_id = c.get("document_id", "unknown"),
+                        )
+                        for c in result["citations"]
+                    ],
+                    model   = result["model"],
+                )
+            finally:
+                unload_colpali()
 
     except Exception as exc:
         print(f"[visual-ai] ask error: {exc}")

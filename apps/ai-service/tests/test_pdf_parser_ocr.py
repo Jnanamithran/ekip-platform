@@ -3,9 +3,9 @@ Tests for the OCR fallback applied to scanned / image-only PDFs.
 
 A PDF page whose extracted text is below SCANNED_DOC_CHAR_THRESHOLD is first
 passed through EasyOCR. When OCR returns usable text the page keeps that text
-and the document is no longer flagged as scanned; when OCR is unavailable or
-fails, the original behaviour (empty page + is_scanned_or_empty flag) is kept
-so the document still gets routed to the ColPali visual pipeline.
+and remains eligible for visual indexing based on its original text layer.
+When OCR is unavailable or fails, the document is also flagged as empty so it
+can be routed to the ColPali visual pipeline.
 """
 
 import sys
@@ -117,6 +117,7 @@ def test_text_pdf_keeps_extracted_text_without_calling_ocr(text_pdf, monkeypatch
     assert calls == [], "OCR must not run for pages that already have a text layer"
     assert "normal text based PDF" in result.pages[0].text
     assert result.is_scanned_or_empty is False
+    assert result.has_scanned_pages is False
     assert result.warning is None
 
 
@@ -135,6 +136,7 @@ def test_scanned_pdf_falls_back_when_ocr_unavailable(image_only_pdf, monkeypatch
 
     assert result.pages[0].text == ""
     assert result.is_scanned_or_empty is True
+    assert result.has_scanned_pages is True
     assert result.warning is not None
     assert "OCR" in result.warning
 
@@ -151,6 +153,7 @@ def test_ocr_failure_is_swallowed_and_does_not_raise(image_only_pdf, monkeypatch
         pytest.fail("parse_pdf must not propagate OCR exceptions")
 
     assert result.is_scanned_or_empty is True
+    assert result.has_scanned_pages is True
     assert result.warning is not None
 
 
@@ -164,6 +167,7 @@ def test_scanned_pdf_uses_ocr_text_when_available(image_only_pdf, stub_easyocr):
 
     assert result.pages[0].text == OCR_TEXT
     assert result.is_scanned_or_empty is False
+    assert result.has_scanned_pages is True
     assert result.warning is None
     assert stub_easyocr["langs"] == ["en"]
 
@@ -212,6 +216,7 @@ def test_ocr_only_runs_for_pages_below_threshold(tmp_path, monkeypatch):
     assert attempted == [2], "only the sparse page should be sent to OCR"
     assert "genuinely long text layer" in result.pages[0].text
     assert result.pages[1].text.startswith("OCR TEXT")
+    assert result.has_scanned_pages is False
 
 
 # â”€â”€ edge cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -223,6 +228,7 @@ def test_empty_pdf_is_flagged_and_does_not_crash(empty_pdf):
     assert result.total_pages == 1
     assert result.pages[0].text == ""
     assert result.is_scanned_or_empty is True
+    assert result.has_scanned_pages is True
     assert result.warning is not None
     assert "OCR" in result.warning
 

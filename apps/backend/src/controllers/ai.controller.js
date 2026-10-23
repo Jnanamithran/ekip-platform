@@ -152,7 +152,11 @@ async function ask(req, res) {
   } catch (err) {
     console.error('[ai] /ask failed:', err.message);
     if (err.response) {
-      res.status(err.response.status).json({ error: err.response.data });
+      const responseData = err.response.data;
+      const errorMessage = typeof responseData === 'string'
+        ? responseData
+        : responseData?.detail || responseData?.error || failureMessage;
+      res.status(err.response.status).json({ error: errorMessage });
     } else {
       res.status(500).json({ error: failureMessage });
     }

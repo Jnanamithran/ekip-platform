@@ -21,6 +21,7 @@ VRAM usage on RTX 3050 6GB:
 
 import os
 import uuid
+import gc
 import torch
 from pathlib import Path
 from PIL import Image
@@ -64,6 +65,16 @@ def get_colpali() -> tuple[ColPali, ColPaliProcessor]:
         _processor = ColPaliProcessor.from_pretrained(COLPALI_MODEL)
         print("[colpali] Model ready.")
     return _model, _processor
+
+
+def unload_colpali() -> None:
+    """Release ColPali and its GPU memory before loading the vision generator."""
+    global _model, _processor
+    _model = None
+    _processor = None
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def get_qdrant() -> QdrantClient:

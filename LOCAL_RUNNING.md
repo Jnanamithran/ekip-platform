@@ -1,4 +1,4 @@
-# Running EKIP Fully Locally (No Docker)
+﻿# Running EKIP Fully Locally (No Docker)
 
 This guide runs every part of EKIP on your Windows machine without Docker:
 frontend, backend, text AI service, optional visual AI service, PostgreSQL, Qdrant, and Ollama.
@@ -116,7 +116,7 @@ QDRANT_URL=http://localhost:6333
 OLLAMA_URL=http://localhost:11434
 BACKEND_URL=http://localhost:5000
 VISUAL_SERVICE_URL=http://localhost:8001
-VISUAL_ASK_TIMEOUT=300
+VISUAL_ASK_TIMEOUT=1800
 ```
 
 ### Frontend `apps/frontend/.env`
@@ -138,7 +138,8 @@ AI_SERVICE_API_KEY=generate-a-random-shared-service-key
 QDRANT_URL=http://localhost:6333
 VISUAL_STORAGE=d:/Program/ekip-platform/apps/backend/uploads/visual
 COLPALI_MODEL=vidore/colpali-v1.2
-QWEN_MODEL=Qwen/Qwen2-VL-7B-Instruct
+QWEN_MODEL=Qwen/Qwen2-VL-2B-Instruct
+HF_HOME=D:/HF-Cache
 ```
 
 > **Storage sharing:** the backend serves page images from
@@ -246,6 +247,22 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8001
 ```
 
 Visual service runs at `http://localhost:8001`.
+
+The visual models load lazily, so starting Uvicorn alone does not load ColPali
+or Qwen2-VL. Only scanned/image-only PDFs are sent to visual ingestion, and a
+question calls visual Q&A only when the caller's RBAC scope includes indexed
+visual pages. ColPali loads for visual ingestion/retrieval; Qwen2-VL loads only
+when visual pages were retrieved. On a 6-GB GPU, the service releases ColPali
+before loading Qwen2-VL and releases Qwen2-VL after answering. Ollama also uses
+GPU memory; stop its loaded model while testing the visual pipeline on a 6-GB
+GPU to avoid competing allocations.
+
+Set `HF_HOME` in `apps/ai-service-visual/.env` to a drive with sufficient
+free space. Hugging Face reads this setting at process startup; setting it
+temporarily in PowerShell does not persist across new terminals. Once model
+weights are cached, later requests load them from disk rather than downloading
+them again. This service unloads models after inference to fit the available
+GPU memory, so loading weights into GPU memory may still take time per request.
 
 ## 10. Recommended startup order
 
@@ -378,7 +395,7 @@ Use this only if you want to wipe all PostgreSQL databases and start completely 
 1. Stop the PostgreSQL service (service name may vary by version):
 
 ```powershell
-net stop postgresql-x64-16
+net stop postgresql-x64-18
 ```
 
 If that name does not exist, find the service name:
@@ -390,7 +407,7 @@ Get-Service | Where-Object {$_.Name -like "*postgres*"}
 2. Delete the PostgreSQL data directory (example path; adjust to your install/version):
 
 ```powershell
-Remove-Item -Recurse -Force "C:\Program Files\PostgreSQL\16\data"
+Remove-Item -Recurse -Force "D:\PostgressSQL\data"
 ```
 
 3. Recreate an empty data directory and reinitialize PostgreSQL:
@@ -487,4 +504,3 @@ cd d:\Program\ekip-platform
 .\apps\ai-service-visual\.venv\Scripts\python.exe -c "import httpx,json,uuid; rbac={'org_id':'org-1','workspace_id':'workspace-1','department_id':'department-1','allowed_role_ids':['role-1'],'uploaded_by':'user-1'}; doc_id=str(uuid.uuid4()); files={'file':('test.pdf',open('apps/ai-service/tests/fixtures/test.pdf','rb'),'application/pdf')}; data={'rbac':json.dumps(rbac),'document_id':doc_id}; h={'x-ekip-service-key':'<AI_SERVICE_API_KEY>'}; r=httpx.Client(timeout=300).post('http://localhost:8001/visual/ingest',data=data,files=files,headers=h); print(r.status_code); print(r.text)"
 ```
 Expected: HTTP 200 with `pages_upserted` (3 for the bundled test PDF) and `pipeline: visual`.
-

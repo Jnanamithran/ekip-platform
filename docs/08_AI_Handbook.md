@@ -15,7 +15,7 @@ uses the visual service's model stack.
 | Ollama `llama3.2:3b` | Local text answer generation |
 | FastAPI visual service | Scanned-page indexing and image-grounded QA |
 | `vidore/colpali-v1.2` | Visual page embeddings |
-| `Qwen/Qwen2-VL-7B-Instruct` | Visual question answering |
+| `Qwen/Qwen2-VL-2B-Instruct` | Visual question answering |
 
 Model downloads can consume substantial disk space and memory. The visual
 models have significantly higher compute requirements than the text pipeline.
@@ -26,7 +26,9 @@ models have significantly higher compute requirements than the text pipeline.
 
 The text service accepts PDF, DOCX, XLSX, and TXT. The detector checks file
 type signatures in addition to the filename extension. Parsers extract page
-or sheet content; PDF pages with little extractable text can use EasyOCR.
+or sheet content; PDF pages with little native text can use EasyOCR. Image-only
+PDFs remain eligible for visual indexing even when OCR successfully extracts
+text, so those documents can be searched by both text and visual content.
 
 Content is split into word-based chunks without crossing page boundaries.
 Chunks are embedded and stored in the `ekip_documents` Qdrant collection with
@@ -122,8 +124,9 @@ page-image previews.
 | `VISUAL_SERVICE_URL` | `http://localhost:8001` | Optional visual-service URL |
 | `AI_SERVICE_API_KEY` | private shared value | Authenticates backend-to-AI and text-to-visual requests |
 | `VISUAL_INGEST_TIMEOUT` | `120` | Visual-ingestion request timeout |
+| `VISUAL_ASK_TIMEOUT` | `1800` | Visual-answer timeout, including initial model load |
 | `COLPALI_MODEL` | `vidore/colpali-v1.2` | Visual embedding model |
-| `QWEN_MODEL` | `Qwen/Qwen2-VL-7B-Instruct` | Visual QA model |
+| `QWEN_MODEL` | `Qwen/Qwen2-VL-2B-Instruct` | Visual QA model |
 | `VISUAL_STORAGE` | `uploads/visual` | Rendered visual page storage |
 | `RENDER_DPI` | `150` | PDF rendering resolution |
 

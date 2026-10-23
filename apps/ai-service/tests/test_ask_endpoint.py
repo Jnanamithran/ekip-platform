@@ -122,6 +122,92 @@ def test_ask_reports_pipeline_stages_and_returns_cited_evidence(monkeypatch):
     ]
 
 
+def test_visual_timeout_does_not_return_a_no_evidence_answer(monkeypatch):
+    monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
+    monkeypatch.setattr(main, 'has_visual_docs', lambda rbac_dict: True)
+
+    async def fake_text_pipeline(*args):
+        return {
+            'answer': "I couldn't find this information in the documents you have permission to access.",
+            'sources': [],
+            'model': 'text-model',
+            'has_answer': False,
+            'pipeline': 'text',
+        }
+
+    async def timed_out_visual_pipeline(*args):
+        raise httpx.ReadTimeout('visual model is still loading')
+
+    monkeypatch.setattr(main, 'run_text_pipeline', fake_text_pipeline)
+    monkeypatch.setattr(main, 'run_visual_pipeline', timed_out_visual_pipeline)
+
+    response = TestClient(main.app).post(
+        '/ask',
+        json={
+            'query': 'Which month had the maximum revenue?',
+            'rbac': {
+                'org_id': 'org-1',
+                'workspace_id': 'workspace-1',
+                'department_id': 'department-1',
+                'role_id': 'role-admin',
+            },
+            'token': 'test-token',
+            'request_id': 'test-visual-timeout',
+        },
+        headers={'x-ekip-service-key': 'test-service-key-12345678901234567890'},
+    )
+
+    assert response.status_code == 504
+    assert 'Visual answering timed out' in response.json()['detail']
+
+
+def test_text_answer_is_returned_when_visual_pipeline_fails(monkeypatch):
+    monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
+    monkeypatch.setattr(main, 'has_visual_docs', lambda rbac_dict: True)
+
+    async def fake_text_pipeline(*args):
+        return {
+            'answer': 'Revenue peaked in July.',
+            'sources': [{
+                'id': 'chunk-1',
+                'document_id': 'doc-1',
+                'filename': 'revenue.pdf',
+                'page': 1,
+                'excerpt': 'July revenue was the highest.',
+                'type': 'text',
+            }],
+            'model': 'text-model',
+            'has_answer': True,
+            'pipeline': 'text',
+        }
+
+    async def failed_visual_pipeline(*args):
+        raise httpx.ReadTimeout('visual model is still loading')
+
+    monkeypatch.setattr(main, 'run_text_pipeline', fake_text_pipeline)
+    monkeypatch.setattr(main, 'run_visual_pipeline', failed_visual_pipeline)
+
+    response = TestClient(main.app).post(
+        '/ask',
+        json={
+            'query': 'Which month had the maximum revenue?',
+            'rbac': {
+                'org_id': 'org-1',
+                'workspace_id': 'workspace-1',
+                'department_id': 'department-1',
+                'role_id': 'role-admin',
+            },
+            'token': 'test-token',
+            'request_id': 'test-visual-timeout-with-text-evidence',
+        },
+        headers={'x-ekip-service-key': 'test-service-key-12345678901234567890'},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['answer'] == 'Revenue peaked in July.'
+    assert response.json()['pipeline'] == 'text'
+
+
 def test_ask_rejects_requests_without_backend_service_key(monkeypatch):
     monkeypatch.setattr(main, 'AI_SERVICE_API_KEY', 'test-service-key-12345678901234567890')
 
