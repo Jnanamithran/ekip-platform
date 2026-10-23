@@ -13,8 +13,8 @@ business-critical data.
 ## Contents
 
 - [Architecture](#architecture)
-- [Run everything with Docker](#run-everything-with-docker)
-- [Run application code locally without Docker](#run-application-code-locally-without-docker)
+- [Run everything locally without Docker](#run-everything-locally-without-docker)
+- [Docker-based setup (optional)](#docker-based-setup-optional)
 - [Use EKIP](#use-ekip)
 - [Configuration](#configuration)
 - [Tests and checks](#tests-and-checks)
@@ -48,7 +48,7 @@ provides a separate scanned-page pipeline using ColPali and Qwen2-VL.
 | Qdrant | 6333 | Text and visual document indexes |
 | Ollama | 11434 | Local `llama3.2:3b` language model |
 | Visual AI service | 8001 | Optional scanned-page ingestion and visual QA |
-## Run everything with Docker
+## Docker-based setup (optional)
 
 ### Requirements
 
@@ -158,9 +158,18 @@ Set-Location .\apps\ai-service
 python -m pytest tests -q
 ```
 
-Some AI tests use live Qdrant or Ollama dependencies; check their fixtures and
-test markers before running them without those services. See
+The text AI suite includes Qdrant integration tests and requires local Qdrant
+on port 6333. Four legacy pipeline demo scripts are excluded from pytest
+collection because they call live Qdrant/Ollama at import time. See
 [AI Handbook: tests](docs/08_AI_Handbook.md#tests).
+
+Visual AI service tests (API behavior and RBAC, without model downloads or Docker):
+
+```powershell
+Set-Location .\apps\ai-service-visual
+.\.venv\Scripts\python.exe -m pip install pytest
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
 
 To apply database migrations to an existing development database, run
 `npx prisma migrate deploy` from `apps/backend`. The default-department
@@ -202,7 +211,13 @@ Google Drive OAuth is optional and requires a Google OAuth client. See
    each can do) from the Manage Roles page. The backend also provides a Google
    Drive integration; connect Drive, then import individual files or whole
    folders from the Integrations page.
-## Run application code locally without Docker
+## Run everything locally without Docker
+
+Use the step-by-step Windows [local running guide](LOCAL_RUNNING.md) as the
+canonical setup for PostgreSQL, Qdrant, Ollama, the backend, both AI services,
+and the frontend. It runs services directly on the host and does not use
+Docker. The visual AI service additionally needs its model weights and a
+CUDA-capable GPU for full inference.
 
 This section describes running each component directly on your host machine
 without using Docker Compose. This is useful for development, debugging, or
@@ -265,22 +280,18 @@ If you don't already have PostgreSQL running:
 **Windows:** Install PostgreSQL and start the service:
 ```powershell
 # Start PostgreSQL service
-net start postgresql
-```
-
-**Or using Docker (one-off):**
-```powershell
-docker run -d -e POSTGRES_DB=ekip -e POSTGRES_USER=ekip_user -e POSTGRES_PASSWORD=ekip_password -p 5432:5432 postgres:15
+net start postgresql-x64-18
 ```
 
 #### 2. Start Qdrant
 
-**Using Docker (recommended for local development):**
 ```powershell
-docker run -d -p 6333:6333 qdrant/qdrant
+Set-Location "$env:USERPROFILE\Desktop"
+.\qdrant.exe
 ```
 
-**Or if already installed locally:** Ensure Qdrant is running on port 6333.
+Qdrant listens on port 6333. For storage configuration and safe reset
+instructions, see [LOCAL_RUNNING.md](LOCAL_RUNNING.md).
 
 #### 3. Start Ollama
 
@@ -299,7 +310,7 @@ ollama pull llama3.2:3b
 ```powershell
 Set-Location .\apps\backend
 npm ci
-npm run migrate  # or: npx prisma migrate dev --name init
+npx prisma migrate deploy --schema src/prisma/schema.prisma
 npm run dev
 ```
 
@@ -312,8 +323,7 @@ Set-Location .\apps\ai-service
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
-ollama serve &  # Ensure Ollama is running in background
-python -m uvicorn app:app --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 The AI service will run at `http://localhost:8000`.
@@ -322,11 +332,23 @@ The AI service will run at `http://localhost:8000`.
 
 ```powershell
 Set-Location .\apps\frontend
-npm install
+npm ci
 npm run dev
 ```
 
 The frontend will be available at `http://localhost:5173`.
+
+#### 7. Start the optional visual AI service
+
+The visual service requires ColPali and Qwen model weights, a compatible
+environment, and a CUDA-capable GPU for practical inference. Follow the
+visual-service setup in [LOCAL_RUNNING.md](LOCAL_RUNNING.md), then run:
+
+```powershell
+Set-Location .\apps\ai-service-visual
+.\.venv\Scripts\activate
+python -m uvicorn main:app --host 0.0.0.0 --port 8001
+```
 
 ### Verification
 
