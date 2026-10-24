@@ -293,29 +293,11 @@ curl.exe -s http://localhost:8000/health
 curl.exe -s http://localhost:6333/collections
 ```
 
-## 12. Useful local reset commands
+## 12. Local reset commands
 
-### Reset Qdrant only
-
-```powershell
-Get-Process qdrant | Stop-Process -Force
-Remove-Item -Recurse -Force "$env:USERPROFILE\Desktop\storage"
-Start-Process -FilePath "$env:USERPROFILE\Desktop\qdrant.exe" -WorkingDirectory "$env:USERPROFILE\Desktop"
-```
-
-### Reset backend database (destructive)
-
-```powershell
-cd d:\Program\ekip-platform\apps\backend
-npx prisma migrate reset --schema src/prisma/schema.prisma
-node src/prisma/seed.js
-```
-
-### Reset uploaded files
-
-```powershell
-Remove-Item -Recurse -Force d:\Program\ekip-platform\apps\backend\uploads\*
-```
+Database, uploaded-file, and Qdrant resets are separate destructive actions.
+Use only the reset procedure for the data you intend to remove. The PostgreSQL
+reset procedure below does not clear uploaded files or Qdrant indexes.
 
 ## 14. Delete and restart Qdrant (local)
 
@@ -366,69 +348,27 @@ Adjust vector sizes to match your embedders.
 
 ---
 
-## 15. Delete and restart PostgreSQL (local)
+## 15. Reset the local PostgreSQL database
 
-### Option A: Drop and recreate only the `ekip` database (recommended)
+The repository-root `reset_db.bat` script prompts before dropping and
+recreating only the `ekip` database, then applies Prisma migrations. It does
+not delete the PostgreSQL data directory, other databases, uploaded files, or
+Qdrant indexes. This permanently removes all records in `ekip`; back up any
+data you need first.
 
-This keeps PostgreSQL running and only wipes the EKIP database.
+From PowerShell at the repository root:
 
 ```powershell
-# Drop the database (terminates existing connections)
-dropdb -U postgres --if-exists ekip
-
-# Recreate it
-createdb -U postgres ekip
+.\reset_db.bat
 ```
 
-Then reset schema and seed data:
+The script expects `psql` to be on `PATH` and uses `PGHOST`, `PGPORT`, and
+`PGUSER` when set; otherwise it connects to `localhost:5432` as `postgres`.
+If PostgreSQL requires a password, enter it when prompted. To create demo
+seed data after the migrations:
 
 ```powershell
-cd d:\Program\ekip-platform\apps\backend
-npx prisma migrate deploy --schema src/prisma/schema.prisma
-node src/prisma/seed.js
-```
-
-### Option B: Full PostgreSQL data reset (destructive)
-
-Use this only if you want to wipe all PostgreSQL databases and start completely fresh.
-
-1. Stop the PostgreSQL service (service name may vary by version):
-
-```powershell
-net stop postgresql-x64-18
-```
-
-If that name does not exist, find the service name:
-
-```powershell
-Get-Service | Where-Object {$_.Name -like "*postgres*"}
-```
-
-2. Delete the PostgreSQL data directory (example path; adjust to your install/version):
-
-```powershell
-Remove-Item -Recurse -Force "D:\PostgressSQL\data"
-```
-
-3. Recreate an empty data directory and reinitialize PostgreSQL:
-
-```powershell
-mkdir "C:\Program Files\PostgreSQL\16\data"
-& "C:\Program Files\PostgreSQL\16\bin\initdb.exe" -D "C:\Program Files\PostgreSQL\16\data" -U postgres
-```
-
-4. Start PostgreSQL again:
-
-```powershell
-net start postgresql-x64-16
-```
-
-5. Create the EKIP database and apply schema:
-
-```powershell
-createdb -U postgres ekip
-cd d:\Program\ekip-platform\apps\backend
-npx prisma migrate deploy --schema src/prisma/schema.prisma
+Set-Location .\apps\backend
 node src/prisma/seed.js
 ```
 

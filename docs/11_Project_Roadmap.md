@@ -11,6 +11,7 @@ coverage.
 - [x] Organization signup, authentication, roles, and refresh tokens
 - [x] PostgreSQL schema and Prisma migrations
 - [x] PDF, DOCX, XLSX, and TXT ingestion
+- [x] OCR fallback for scanned PDFs and ingestion/search progress reporting
 - [x] Page-aware chunking and dense text embeddings
 - [x] Qdrant indexing and access metadata
 - [x] Sparse BM25 and hybrid retrieval
