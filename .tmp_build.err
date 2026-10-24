@@ -1,3 +1,0 @@
---progress is a global compose flag, better use `docker compose --progress xx build ...
- Image ekip-platform-ai-service-visual Building 
- Image ekip-platform-ai-service-visual Built 

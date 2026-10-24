@@ -118,6 +118,7 @@ def test_text_pdf_keeps_extracted_text_without_calling_ocr(text_pdf, monkeypatch
     assert "normal text based PDF" in result.pages[0].text
     assert result.is_scanned_or_empty is False
     assert result.has_scanned_pages is False
+    assert result.has_image_content is False
     assert result.warning is None
 
 
@@ -137,6 +138,7 @@ def test_scanned_pdf_falls_back_when_ocr_unavailable(image_only_pdf, monkeypatch
     assert result.pages[0].text == ""
     assert result.is_scanned_or_empty is True
     assert result.has_scanned_pages is True
+    assert result.has_image_content is False
     assert result.warning is not None
     assert "OCR" in result.warning
 
@@ -168,6 +170,7 @@ def test_scanned_pdf_uses_ocr_text_when_available(image_only_pdf, stub_easyocr):
     assert result.pages[0].text == OCR_TEXT
     assert result.is_scanned_or_empty is False
     assert result.has_scanned_pages is True
+    assert result.has_image_content is False
     assert result.warning is None
     assert stub_easyocr["langs"] == ["en"]
 
@@ -216,7 +219,7 @@ def test_ocr_only_runs_for_pages_below_threshold(tmp_path, monkeypatch):
     assert attempted == [2], "only the sparse page should be sent to OCR"
     assert "genuinely long text layer" in result.pages[0].text
     assert result.pages[1].text.startswith("OCR TEXT")
-    assert result.has_scanned_pages is False
+    assert result.has_scanned_pages is True
 
 
 # â”€â”€ edge cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -229,8 +232,21 @@ def test_empty_pdf_is_flagged_and_does_not_crash(empty_pdf):
     assert result.pages[0].text == ""
     assert result.is_scanned_or_empty is True
     assert result.has_scanned_pages is True
+    assert result.has_image_content is False
     assert result.warning is not None
     assert "OCR" in result.warning
+
+
+def test_image_rich_pdf_is_flagged_for_visual_indexing(text_pdf, monkeypatch):
+    monkeypatch.setattr(
+        pdf_parser,
+        "_count_images_on_page",
+        lambda doc, page_num: pdf_parser.MIN_IMAGES_PER_PAGE_FOR_VISUAL,
+    )
+
+    result = parse_pdf(str(text_pdf), "text.pdf")
+
+    assert result.has_image_content is True
 
 
 def test_pixmap_conversion_handles_rgb_rgba_and_grayscale():

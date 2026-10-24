@@ -24,7 +24,7 @@ production-hardened service.
 | --- | --- | --- |
 | Frontend (`apps/frontend`) | Implemented | React/Vite sign-up and login, account settings, search and answer history, upload, document previews, workspace and department management, department-grouped user management, scoped role management, analytics, and Google Drive integration screens. Document role selectors filter department-scoped roles against each target department; the Owner role is always selected and disabled in document access controls. |
 | Backend (`apps/backend`) | Implemented | Express APIs, Prisma/PostgreSQL access, authentication, permission checks, user and workspace administration, organization-wide and department-scoped role management, document operations, AI-service proxy, analytics, and Google Drive integration. Upload, document access updates, and Drive imports validate role scope against the target department. |
-| Text AI (`apps/ai-service`) | Implemented | PDF, DOCX, XLSX, and TXT parsing; scanned-PDF OCR fallback; page-aware chunking; embeddings; Qdrant indexing; access-filtered dense and sparse retrieval; hybrid ranking; reranking; Ollama generation; citation extraction; and document preview support. |
+| Text AI (`apps/ai-service`) | Implemented | PDF, DOCX, XLSX, and TXT parsing; scanned-PDF OCR fallback; page-aware chunking; embeddings; Qdrant indexing; access-filtered dense and sparse retrieval; hybrid ranking; reranking; Ollama generation; citation extraction; document preview support; and upload/search stage progress reporting to the backend. |
 | Visual AI (`apps/ai-service-visual`) | Optional implementation | ColPali page embeddings and Qwen2-VL question answering for scanned pages. The service is included in the Docker Compose `ai` profile and needs additional model resources and compatible GPU support. |
 | PostgreSQL and Prisma | Integrated | Organization, workspace, department, user, role, document, document-role access, refresh-token, integration-token, answer-history, and request-progress data models, with migrations. |
 | Qdrant | Integrated | Vector storage and retrieval for text and visual document content. |
@@ -48,13 +48,15 @@ production-hardened service.
    XLSX, or TXT files. The backend forwards files for processing; the AI
    service extracts content, chunks it, creates embeddings, and indexes it
    with organization, workspace, department, and role access metadata.
+   Processing stages and indexing progress are reported to the backend.
    Document access selectors show organization-wide roles and only the
    department-specific roles matching the target department; Owner access is
    included and locked in the UI.
 4. **Question answering:** the backend derives authorization context from the
    authenticated user. The AI service filters document retrieval by that
    context, combines dense and sparse search, reranks passages, generates an
-   answer with Ollama, and returns citations.
+   answer with Ollama, returns citations, and reports search stages to the
+   backend.
 5. **History and source review:** answer history is associated with the
    requesting user. The application provides text citations and PDF/page
    preview support when the source original is retained.

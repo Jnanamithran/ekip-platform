@@ -230,6 +230,10 @@ and the frontend. It runs services directly on the host and does not use
 Docker. The visual AI service additionally needs its model weights and a
 CUDA-capable GPU for full inference.
 
+For a local database reset, follow the guide's [PostgreSQL reset instructions](LOCAL_RUNNING.md#15-reset-the-local-postgresql-database).
+The root `reset_db.bat` script prompts before deleting and recreating only the
+`ekip` database; it does not reset uploaded files or Qdrant.
+
 This section describes running each component directly on your host machine
 without using Docker Compose. This is useful for development, debugging, or
 when Docker resources are limited.
