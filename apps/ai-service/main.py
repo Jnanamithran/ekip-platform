@@ -111,6 +111,12 @@ async def report_progress(token: str, endpoint: str, **details):
             json=details,
             headers={'Authorization': f'Bearer {token}'},
         )
+        if response.status_code == 401:
+            print(
+                f'[ai-service] progress update skipped for {endpoint}: '
+                'the user access token expired or was rejected'
+            )
+            return
         response.raise_for_status()
 
 
@@ -122,6 +128,12 @@ def report_progress_sync(token: str, endpoint: str, **details):
             json=details,
             headers={'Authorization': f'Bearer {token}'},
         )
+        if response.status_code == 401:
+            print(
+                f'[ai-service] progress update skipped for {endpoint}: '
+                'the user access token expired or was rejected'
+            )
+            return
         response.raise_for_status()
 
 
@@ -456,6 +468,7 @@ async def ingest(
                 and (
                     getattr(ingest_result, 'has_scanned_pages', False)
                     or ingest_result.is_scanned_or_empty
+                    or getattr(ingest_result, 'has_image_content', False)
                 )
             )
             print(

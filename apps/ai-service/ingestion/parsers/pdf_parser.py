@@ -12,6 +12,10 @@ from ..schema import IngestResult, PageContent, FileType
 # Real text-based PDFs almost always exceed this by a wide margin.
 SCANNED_DOC_CHAR_THRESHOLD = 20
 
+# Minimum number of images on a page to consider it image-rich.
+# PDFs with charts/logos/etc will have enough images to trigger visual indexing.
+MIN_IMAGES_PER_PAGE_FOR_VISUAL = 2
+
 # ── EasyOCR fallback (lazy singleton) ────────────────────────────────────────
 # easyocr.Reader loads ~100MB of detection + recognition model weights, so it
 # is created once and reused across pages rather than re-instantiated per page.
@@ -87,15 +91,24 @@ def try_ocr_page(pdf_path: str, page_num: int, doc=None) -> str:
         return ""
 
 
+def _count_images_on_page(doc, page_num: int) -> int:
+    """Count the number of images embedded on a specific PDF page."""
+    page = doc[page_num - 1]
+    # Get image list for this page: [(image_index, suffix, bbox), ...]
+    img_list = page.get_images(full=False)
+    return len(img_list) if img_list else 0
+
+
 def parse_pdf(file_path: str, filename: str) -> IngestResult:
     doc = pymupdf.open(file_path)
     pages = []
-    native_text_chars = 0
+    has_scanned_pages = False
+    has_image_content = False
 
     for page_num, page in enumerate(doc, start=1):
         text = page.get_text("text").strip()
-        native_text_chars += len(text)
         if len(text) < SCANNED_DOC_CHAR_THRESHOLD:
+            has_scanned_pages = True
             # Try OCR before giving up on this page. OCR must never break
             # ingestion, so any failure falls back to the original (empty) text.
             try:
@@ -104,6 +117,11 @@ def parse_pdf(file_path: str, filename: str) -> IngestResult:
                 ocr_text = ""
             if len(ocr_text) > SCANNED_DOC_CHAR_THRESHOLD:
                 text = ocr_text  # OCR succeeded — use OCR text instead
+        # NEW: Check if this page has enough images to consider it image-rich
+        img_count = _count_images_on_page(doc, page_num)
+        if img_count >= MIN_IMAGES_PER_PAGE_FOR_VISUAL:
+            has_image_content = True
+
         pages.append(PageContent(page_num=page_num, text=text))
 
     doc.close()
@@ -111,8 +129,6 @@ def parse_pdf(file_path: str, filename: str) -> IngestResult:
     total_chars = sum(p.char_count for p in pages)
     avg_chars_per_page = total_chars / len(pages) if pages else 0
     is_scanned = avg_chars_per_page < SCANNED_DOC_CHAR_THRESHOLD
-    avg_native_chars_per_page = native_text_chars / len(pages) if pages else 0
-    has_scanned_pages = avg_native_chars_per_page < SCANNED_DOC_CHAR_THRESHOLD
 
     warning = None
     if is_scanned:
@@ -127,5 +143,6 @@ def parse_pdf(file_path: str, filename: str) -> IngestResult:
         pages=pages,
         is_scanned_or_empty=is_scanned,
         has_scanned_pages=has_scanned_pages,
+        has_image_content=has_image_content,
         warning=warning,
     )
