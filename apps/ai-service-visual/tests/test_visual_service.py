@@ -126,6 +126,113 @@ def test_search_rejects_invalid_request(client):
     assert response.status_code == 422
 
 
+def test_search_drops_pages_below_visual_min_score(client, monkeypatch):
+    monkeypatch.setattr(visual_service, "VISUAL_MIN_SCORE", 0.6)
+    monkeypatch.setattr(
+        visual_service,
+        "search_visual",
+        lambda **kwargs: [
+            {
+                "document_id": "doc-hits",
+                "filename": "report.pdf",
+                "page_num": 2,
+                "image_path": "report_page2.jpg",
+                "score": 0.91,
+            },
+            {
+                "document_id": "doc-noise",
+                "filename": "receipt.pdf",
+                "page_num": 1,
+                "image_path": "receipt_page1.jpg",
+                "score": 0.42,
+            },
+        ],
+    )
+
+    response = client.post("/visual/search", json=SEARCH_REQUEST, headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert [r["document_id"] for r in response.json()["results"]] == ["doc-hits"]
+
+
+def test_search_returns_no_pages_when_all_below_min_score(client, monkeypatch):
+    monkeypatch.setattr(visual_service, "VISUAL_MIN_SCORE", 0.6)
+    monkeypatch.setattr(
+        visual_service,
+        "search_visual",
+        lambda **kwargs: [
+            {
+                "document_id": "doc-noise",
+                "filename": "receipt.pdf",
+                "page_num": 1,
+                "image_path": "receipt_page1.jpg",
+                "score": 0.42,
+            }
+        ],
+    )
+
+    response = client.post("/visual/search", json=SEARCH_REQUEST, headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+
+
+def test_search_keeps_everything_when_min_score_is_disabled(client, monkeypatch):
+    monkeypatch.setattr(visual_service, "VISUAL_MIN_SCORE", 0.0)
+    monkeypatch.setattr(
+        visual_service,
+        "search_visual",
+        lambda **kwargs: [
+            {
+                "document_id": "doc",
+                "filename": "f.pdf",
+                "page_num": 1,
+                "image_path": "f_page1.jpg",
+                "score": 0.01,
+            }
+        ],
+    )
+
+    response = client.post("/visual/search", json=SEARCH_REQUEST, headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert [r["document_id"] for r in response.json()["results"]] == ["doc"]
+
+
+def test_ask_skips_generator_when_all_pages_below_min_score(client, monkeypatch):
+    monkeypatch.setattr(visual_service, "VISUAL_MIN_SCORE", 0.6)
+    monkeypatch.setattr(
+        visual_service,
+        "search_visual",
+        lambda **kwargs: [
+            {
+                "document_id": "doc-noise",
+                "filename": "receipt.pdf",
+                "page_num": 1,
+                "image_path": "receipt_page1.jpg",
+                "score": 0.42,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        visual_service,
+        "answer_from_images",
+        lambda **kwargs: pytest.fail("generator must not run with only low-score pages"),
+    )
+
+    response = client.post(
+        "/visual/ask",
+        json={**SEARCH_REQUEST, "question": "What is revenue?"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["citations"] == []
+    assert response.json()["answer"] == (
+        "No relevant visual content found in your accessible documents."
+    )
+
+
 def test_ask_returns_empty_answer_when_no_accessible_pages_exist(
     client, monkeypatch
 ):

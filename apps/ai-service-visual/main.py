@@ -55,7 +55,23 @@ from PIL import Image
 
 app = FastAPI(title="EKIP Visual AI Service", version="0.1.0")
 AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "")
+# ColPali MaxSim similarity floor: pages below it are noise (unrelated pages
+# typically score well under 0.5). Set VISUAL_MIN_SCORE=0 to disable.
+VISUAL_MIN_SCORE = float(os.getenv("VISUAL_MIN_SCORE", "0.5"))
 _visual_model_lock = threading.RLock()
+
+
+def _above_min_score(results: list[dict]) -> list[dict]:
+    if VISUAL_MIN_SCORE <= 0:
+        return list(results)
+    kept = [r for r in results if r["score"] >= VISUAL_MIN_SCORE]
+    if len(kept) != len(results):
+        print(
+            f"[visual-ai] min-score filter dropped "
+            f"{len(results) - len(kept)} of {len(results)} pages "
+            f"(VISUAL_MIN_SCORE={VISUAL_MIN_SCORE})"
+        )
+    return kept
 
 
 async def require_ai_service_key(x_ekip_service_key: str | None = Header(default=None)):
@@ -256,7 +272,7 @@ def search(
                 image_path  = r["image_path"],
                 score       = r["score"],
             )
-            for r in raw_results
+            for r in _above_min_score(raw_results)
         ]
 
         return VisualSearchResponse(results=results, query=req.query)
@@ -298,6 +314,7 @@ async def ask_visual(
                     top_k  = req.top_k,
                 )
                 print(f"[visual] ColPali returned {len(top_pages)} pages")
+                top_pages = _above_min_score(top_pages)
 
                 if not top_pages:
                     print("[visual] No accessible visual pages; skipping Qwen2-VL")
